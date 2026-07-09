@@ -157,29 +157,17 @@ final class CaptureController: NSObject, ObservableObject,
         if movieOutput.isRecording { movieOutput.stopRecording() }
     }
 
+    // P2.8 — no auto-trim: hand the raw recorded file straight to lastClipURL. analyzeSession
+    // already segments multi-swing clips correctly (the same path a Photos multi-swing import
+    // already exercises), so re-running pose estimation here just to keep the first detected
+    // window was a redundant on-device Vision pass that silently discarded any extra swing
+    // captured in the same take.
     func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL,
                     from connections: [AVCaptureConnection], error: Error?) {
-        DispatchQueue.main.async { self.isRecording = false }
-        Task { await self.autoTrim(outputFileURL) }
-    }
-
-    /// Auto-trim the recorded clip to the detected swing window (Segmenter), then publish it.
-    private func autoTrim(_ url: URL) async {
-        guard let pose = try? PoseEstimator.pose(video: url),
-              let win = Segmenter.swings(in: pose).first else {
-            await MainActor.run { self.lastClipURL = url }; return
+        DispatchQueue.main.async {
+            self.isRecording = false
+            self.lastClipURL = outputFileURL
         }
-        let asset = AVURLAsset(url: url)
-        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
-            await MainActor.run { self.lastClipURL = url }; return
-        }
-        let out = FileManager.default.temporaryDirectory.appendingPathComponent("trim-\(UUID().uuidString).mov")
-        export.timeRange = CMTimeRange(start: CMTime(seconds: win.start, preferredTimescale: 600),
-                                       end: CMTime(seconds: win.end, preferredTimescale: 600))
-        let final: URL
-        do { try await export.export(to: out, as: .mov); final = out }
-        catch { final = url }
-        await MainActor.run { self.lastClipURL = final }
     }
 
     private static let jointMap: [(VNHumanBodyPoseObservation.JointName, SwingCore.Joint)] = [

@@ -118,6 +118,18 @@ final class AppValidationTests: XCTestCase {
         XCTAssertGreaterThan(cmp.overall, 0)
     }
 
+    /// P2.8 — a continuous take with two swings must not be discarded down to one. Replays a
+    /// synthetic two-swing pose fixture through the exact `analyzeSession` path a multi-swing
+    /// Photos import already exercises, and asserts both swings survive segmentation.
+    func testAnalyzeSessionSegmentsMultipleSwings() throws {
+        let bundle = Bundle(for: type(of: self))
+        let jsonURL = try XCTUnwrap(bundle.url(forResource: "sample_multiswing.pose", withExtension: "json"))
+        let replay = try ReplayPoseProvider(contentsOf: jsonURL)
+        let session = try SwingAnalyzer.analyzeSession(video: URL(fileURLWithPath: "/dev/null"),
+                                                        club: i7, angle: .faceOn, hand: .right, provider: replay)
+        XCTAssertGreaterThanOrEqual(session.swings.count, 2, "both swings survive segmentation")
+    }
+
     func testBenchmarksClubAware() {
         let wedge = FaultEvaluator.benchmarks(category: .wedge)
         let driver = FaultEvaluator.benchmarks(category: .driver)
