@@ -3,11 +3,11 @@ import XCTest
 
 final class ModelsTests: XCTestCase {
     func testClubCategoryMapping() {
-        XCTAssertEqual(Club.dr.category, .driver)
-        XCTAssertEqual(Club.w3.category, .wood)
-        XCTAssertEqual(Club.i7.category, .midIron)
-        XCTAssertEqual(Club.pw.category, .wedge)
-        XCTAssertEqual(Club.sw.category, .wedge)
+        XCTAssertEqual(ClubSpec(category: .driver).category, .driver)
+        XCTAssertEqual(ClubSpec(category: .wood, number: 3).category, .wood)
+        XCTAssertEqual(ClubSpec(category: .iron, number: 7).category, .iron)
+        XCTAssertEqual(ClubSpec(category: .wedge, loft: 46).category, .wedge)
+        XCTAssertEqual(ClubSpec(category: .wedge, loft: 56).category, .wedge)
     }
 
     func testMetricsSubscript() {
