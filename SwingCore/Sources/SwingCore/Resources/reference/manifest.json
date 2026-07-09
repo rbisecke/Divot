@@ -1,0 +1,17 @@
+{
+  "_comment": "Reference/model template library — fully populated with real pro swings. Templates store only DERIVED normalized pose (no video). Built via refkit (uv/yt-dlp) -> detectswings/splitswings -> poseextract -> analyze -> buildref.",
+  "clubs": ["driver", "wood", "mid-iron", "wedge"],
+  "views": ["face_on", "dtl"],
+  "templates": {
+    "driver_face_on":   { "status": "seeded (pro)",       "model": "reference/driver_face_on/model.json",   "source": "Justin Thomas driver, face-on",        "youtube": "Shk6obgJMsE" },
+    "driver_dtl":       { "status": "seeded (pro)",       "model": "reference/driver_dtl/model.json",       "source": "Adam Scott driver, down-the-line",      "youtube": "XwnbLuQSLuY" },
+    "wood_face_on":     { "status": "seeded (pro)",       "model": "reference/wood_face_on/model.json",     "source": "Brooke Henderson fairway wood, face-on","youtube": "ZvK6LdFV7-s" },
+    "wood_dtl":         { "status": "seeded (pro)",       "model": "reference/wood_dtl/model.json",         "source": "Dustin Johnson fairway wood",           "youtube": "HBOqZxxr_Go" },
+    "mid-iron_face_on": { "status": "seeded (pro)",       "model": "reference/mid-iron_face_on/model.json", "source": "Rory McIlroy iron, face-on",            "youtube": "ro7RZErg7ng" },
+    "mid-iron_dtl":     { "status": "seeded (pro)",       "model": "reference/mid-iron_dtl/model.json",     "source": "Justin Thomas iron, down-the-line",     "youtube": "rDDuYNSFXF8" },
+    "wedge_face_on":    { "status": "seeded (pro proxy)", "model": "reference/wedge_face_on/model.json",    "source": "Rory McIlroy iron (proxy for wedge), face-on", "youtube": "ro7RZErg7ng", "note": "swap for a real pro WEDGE face-on when available" },
+    "wedge_dtl":        { "status": "seeded (pro proxy)", "model": "reference/wedge_dtl/model.json",        "source": "Justin Thomas iron (proxy for wedge), DTL",    "youtube": "rDDuYNSFXF8", "note": "swap for a real pro WEDGE DTL when available" }
+  },
+  "howto": "cd refkit && bash ../run/add_ref.sh '<youtube-url>' <club-category> <view> '<source label>'",
+  "notes": "6 slots use an exact-club pro swing; the 2 wedge slots use a pro IRON as a proxy (wedge body mechanics ~ iron). Full-res clips downloaded with yt-dlp (personal use); only normalized templates are committed, never the video (reference/_src/ is git-ignored). Auto-segmented via detectswings/splitswings — a couple of clips came from compilation videos, so event detection on the reference itself may be imperfect; re-run add_ref on a cleaner single-swing clip to improve any slot."
+}

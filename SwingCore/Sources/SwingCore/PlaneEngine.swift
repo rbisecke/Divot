@@ -1,0 +1,57 @@
+import Foundation
+import CoreGraphics
+
+// C3 — over-the-top / shallowing metric: perpendicular deviation of the downswing path
+// (hand-path by default, club-head path if provided) from the shaft plane, normalized to
+// shoulder width. Positive deviation on the "over" side of the plane → over-the-top.
+// NOTE: the sign convention + threshold are a first pass to be tuned on real DTL footage.
+
+public struct PlaneAnalysis: Codable, Sendable {
+    public let plane: SwingLine
+    public let overTheTop: Bool
+    public let maxAbovePlane: Double        // shoulder-width units
+    public let source: String               // "hand" | "club"
+    public let downswingPath: [CGPoint]
+    public init(plane: SwingLine, overTheTop: Bool, maxAbovePlane: Double, source: String, downswingPath: [CGPoint]) {
+        self.plane = plane; self.overTheTop = overTheTop; self.maxAbovePlane = maxAbovePlane
+        self.source = source; self.downswingPath = downswingPath
+    }
+}
+
+public enum PlaneEngine {
+
+    public static let overTheTopThreshold = 0.15   // shoulder-widths
+
+    public static func analyze(_ pose: PoseSequence, events: SwingEvents, angle: Angle = .faceOn,
+                               hand: Hand = .right, ball: CGPoint?, clubPath: [CGPoint]? = nil) -> PlaneAnalysis {
+        let plane = SwingLines.shaftPlane(pose, events: events, hand: hand, ball: ball)
+        let path = clubPath ?? SwingLines.handPath(pose, from: events.top.frame, to: events.impact.frame, hand: hand)
+        let src = clubPath != nil ? "club" : "hand"
+
+        // unit normal of the plane (top-left space)
+        let dx = Double(plane.b.x - plane.a.x), dy = Double(plane.b.y - plane.a.y)
+        let len = (dx * dx + dy * dy).squareRoot()
+        guard len > 1e-6, !path.isEmpty else {
+            return PlaneAnalysis(plane: plane, overTheTop: false, maxAbovePlane: 0, source: src, downswingPath: path)
+        }
+        let nx = -dy / len, ny = dx / len
+
+        // shoulder width (normalized) at address for scale
+        let s = JointSeries(pose)
+        let a = min(max(events.address.frame, 0), max(s.n - 1, 0))
+        let sdx = s.jx(.leftShoulder)[a] - s.jx(.rightShoulder)[a]
+        let sdy = s.jy(.leftShoulder)[a] - s.jy(.rightShoulder)[a]
+        var sw = (sdx * sdx + sdy * sdy).squareRoot()
+        if !(sw.isFinite && sw > 0.02) { sw = 0.2 }
+
+        var maxDev = -Double.infinity
+        for p in path {
+            let dev = (Double(p.x) - Double(plane.a.x)) * nx + (Double(p.y) - Double(plane.a.y)) * ny
+            if dev.isFinite { maxDev = max(maxDev, dev) }
+        }
+        let maxAbove = (maxDev.isFinite ? maxDev : 0) / sw
+        let rounded = (maxAbove * 100).rounded() / 100
+        return PlaneAnalysis(plane: plane, overTheTop: rounded > overTheTopThreshold,
+                             maxAbovePlane: rounded, source: src, downswingPath: path)
+    }
+}
