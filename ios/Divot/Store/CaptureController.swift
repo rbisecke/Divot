@@ -1,0 +1,191 @@
+// Part of Divot (built + tested; see App/DivotApp.swift).
+// P2.1 — in-app guided recorder. DEVICE-GATED: compiles on the Simulator but capture
+// and live pose only run on a real iPhone (Simulator has no camera / body-pose model).
+import Foundation
+import AVFoundation
+import Vision
+import SwingCore
+
+final class CaptureController: NSObject, ObservableObject,
+    AVCaptureVideoDataOutputSampleBufferDelegate, AVCaptureFileOutputRecordingDelegate {
+
+    @Published var framingOK = false
+    @Published var framingReason = "Point the camera at your setup"
+    @Published var isRecording = false
+    @Published var permissionDenied = false
+    @Published var highFps = false
+    @Published var lastClipURL: URL?
+    @Published var dtlMode = false   // false = face-on guide, true = down-the-line (side-on) guide
+    @Published var cameraPosition: AVCaptureDevice.Position = .back
+
+    /// Pure guide selector (testable): DTL uses the side-on check, otherwise the face-on check.
+    static func framing(_ joints: [SwingCore.Joint: JointPoint], dtl: Bool) -> (ok: Bool, reason: String) {
+        dtl ? FramingGuide.dtlInFrame(joints) : FramingGuide.inFrame(joints)
+    }
+
+    /// The camera to switch to from a given position (testable).
+    static func nextPosition(_ p: AVCaptureDevice.Position) -> AVCaptureDevice.Position {
+        p == .back ? .front : .back
+    }
+
+    let session = AVCaptureSession()
+    private let sessionQueue = DispatchQueue(label: "capture.session")
+    private let videoOutput = AVCaptureVideoDataOutput()
+    private let movieOutput = AVCaptureMovieFileOutput()
+    private var currentInput: AVCaptureDeviceInput?
+    private var configured = false
+
+    // motion auto-record state (lead-wrist vertical position over recent frames)
+    private var recentWristY: [Double] = []
+    private var frameCounter = 0
+    private var settleCounter = 0
+
+    func requestAndConfigure() {
+        AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
+            guard let self else { return }
+            if !granted { DispatchQueue.main.async { self.permissionDenied = true }; return }
+            self.sessionQueue.async { self.configure() }
+        }
+    }
+
+    private func configure() {
+        guard !configured else { return }
+        session.beginConfiguration()
+        session.sessionPreset = .high
+        guard addCameraInput(position: cameraPosition) else {
+            session.commitConfiguration(); return
+        }
+        videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "capture.frames"))
+        if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
+        if session.canAddOutput(movieOutput) { session.addOutput(movieOutput) }
+        session.commitConfiguration()
+        configured = true
+        session.startRunning()
+    }
+
+    /// Add the wide-angle camera at `position` and pick its highest frame rate. Tracks the input
+    /// so it can be swapped when switching cameras. Returns false if that camera is unavailable.
+    @discardableResult
+    private func addCameraInput(position: AVCaptureDevice.Position) -> Bool {
+        guard let device = AVCaptureDevice.default(.builtInWideAngleCamera, for: .video, position: position),
+              let input = try? AVCaptureDeviceInput(device: device),
+              session.canAddInput(input) else { return false }
+        session.addInput(input)
+        currentInput = input
+
+        // Prefer the highest frame rate the camera advertises (240 on the back camera if available;
+        // the front camera is typically lower, which just disables the high-speed badge).
+        if let best = device.formats.max(by: { fmt, other in maxFps(fmt) < maxFps(other) }) {
+            let fps = maxFps(best)
+            try? device.lockForConfiguration()
+            device.activeFormat = best
+            let dur = CMTimeMake(value: 1, timescale: Int32(max(30, fps)))
+            device.activeVideoMinFrameDuration = dur
+            device.activeVideoMaxFrameDuration = dur
+            device.unlockForConfiguration()
+            DispatchQueue.main.async { self.highFps = fps >= 120 }
+        }
+        return true
+    }
+
+    /// Flip between the back and front cameras (ignored mid-recording). Falls back to the current
+    /// camera if the target isn't available.
+    func switchCamera() {
+        sessionQueue.async {
+            guard self.configured, !self.movieOutput.isRecording else { return }
+            let target = Self.nextPosition(self.cameraPosition)
+            self.session.beginConfiguration()
+            if let cur = self.currentInput { self.session.removeInput(cur); self.currentInput = nil }
+            let position = self.addCameraInput(position: target) ? target
+                : (self.addCameraInput(position: self.cameraPosition) ? self.cameraPosition : self.cameraPosition)
+            self.session.commitConfiguration()
+            DispatchQueue.main.async { self.cameraPosition = position }
+        }
+    }
+
+    private func maxFps(_ f: AVCaptureDevice.Format) -> Double {
+        f.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
+    }
+
+    func stop() { sessionQueue.async { if self.session.isRunning { self.session.stopRunning() } } }
+
+    // MARK: live pose → framing guide + motion auto-record
+
+    func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
+                       from connection: AVCaptureConnection) {
+        frameCounter += 1
+        guard frameCounter % 3 == 0 else { return }   // throttle pose to ~every 3rd frame
+        let handler = VNImageRequestHandler(cmSampleBuffer: sampleBuffer, orientation: .up, options: [:])
+        let req = VNDetectHumanBodyPoseRequest()
+        try? handler.perform([req])
+        guard let obs = req.results?.first as? VNHumanBodyPoseObservation,
+              let pts = try? obs.recognizedPoints(.all) else { return }
+        var joints: [SwingCore.Joint: JointPoint] = [:]
+        for (vn, j) in Self.jointMap {
+            if let p = pts[vn], p.confidence >= 0.15 {
+                joints[j] = JointPoint(x: Double(p.location.x), y: Double(p.location.y), c: Double(p.confidence))
+            }
+        }
+        let guide = Self.framing(joints, dtl: dtlMode)
+        let leadY = joints[.leftWrist]?.y
+        DispatchQueue.main.async { self.framingOK = guide.ok; self.framingReason = guide.reason }
+        detectMotion(leadWristY: leadY, framingOK: guide.ok)
+    }
+
+    private func detectMotion(leadWristY: Double?, framingOK: Bool) {
+        guard let y = leadWristY else { return }
+        recentWristY.append(y); if recentWristY.count > 12 { recentWristY.removeFirst() }
+        guard recentWristY.count >= 6 else { return }
+        let span = (recentWristY.max() ?? 0) - (recentWristY.min() ?? 0)
+        if !isRecording, framingOK, span > 0.20 {           // a swing started
+            beginRecording()
+        } else if isRecording {
+            if span < 0.03 { settleCounter += 1 } else { settleCounter = 0 }
+            if settleCounter > 15 { endRecording() }         // motion settled → stop
+        }
+    }
+
+    private func beginRecording() {
+        guard !movieOutput.isRecording else { return }
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("cap-\(UUID().uuidString).mov")
+        DispatchQueue.main.async { self.isRecording = true }
+        movieOutput.startRecording(to: url, recordingDelegate: self)
+    }
+
+    private func endRecording() {
+        settleCounter = 0
+        if movieOutput.isRecording { movieOutput.stopRecording() }
+    }
+
+    func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL,
+                    from connections: [AVCaptureConnection], error: Error?) {
+        DispatchQueue.main.async { self.isRecording = false }
+        Task { await self.autoTrim(outputFileURL) }
+    }
+
+    /// Auto-trim the recorded clip to the detected swing window (Segmenter), then publish it.
+    private func autoTrim(_ url: URL) async {
+        guard let pose = try? PoseEstimator.pose(video: url),
+              let win = Segmenter.swings(in: pose).first else {
+            await MainActor.run { self.lastClipURL = url }; return
+        }
+        let asset = AVURLAsset(url: url)
+        guard let export = AVAssetExportSession(asset: asset, presetName: AVAssetExportPresetHighestQuality) else {
+            await MainActor.run { self.lastClipURL = url }; return
+        }
+        let out = FileManager.default.temporaryDirectory.appendingPathComponent("trim-\(UUID().uuidString).mov")
+        export.timeRange = CMTimeRange(start: CMTime(seconds: win.start, preferredTimescale: 600),
+                                       end: CMTime(seconds: win.end, preferredTimescale: 600))
+        let final: URL
+        do { try await export.export(to: out, as: .mov); final = out }
+        catch { final = url }
+        await MainActor.run { self.lastClipURL = final }
+    }
+
+    private static let jointMap: [(VNHumanBodyPoseObservation.JointName, SwingCore.Joint)] = [
+        (.nose, .nose), (.neck, .neck), (.leftShoulder, .leftShoulder), (.rightShoulder, .rightShoulder),
+        (.leftElbow, .leftElbow), (.rightElbow, .rightElbow), (.leftWrist, .leftWrist), (.rightWrist, .rightWrist),
+        (.leftHip, .leftHip), (.rightHip, .rightHip), (.leftKnee, .leftKnee), (.rightKnee, .rightKnee),
+        (.leftAnkle, .leftAnkle), (.rightAnkle, .rightAnkle)
+    ]
+}

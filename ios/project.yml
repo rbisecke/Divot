@@ -1,0 +1,95 @@
+name: Divot
+options:
+  bundleIdPrefix: com.rboyarov91
+  deploymentTarget:
+    iOS: "26.0"
+  createIntermediateGroups: true
+
+packages:
+  SwingCore:
+    path: ../SwingCore
+
+# Signing (DEVELOPMENT_TEAM) comes from Config/Signing.xcconfig, which optionally
+# pulls in the gitignored Config/Signing.local.xcconfig. Keeps the Team ID out of git.
+configFiles:
+  Debug: Config/Signing.xcconfig
+  Release: Config/Signing.xcconfig
+
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "1.0"
+    CURRENT_PROJECT_VERSION: "1"
+    TARGETED_DEVICE_FAMILY: "1"
+    # Free personal-team signing (works on Simulator, device, and Designed-for-iPad Mac).
+    CODE_SIGN_STYLE: Automatic
+
+targets:
+  Divot:
+    type: application
+    platform: iOS
+    sources:
+      - path: Divot
+        excludes:
+          - "SETUP.md"
+          - "EXPERIMENTAL.md"
+      # Synthetic placeholder so the DEBUG sample-data seeder (screenshots) has a clip.
+      - path: DivotTests/Fixtures/placeholder_swing.mov
+        buildPhase: resources
+      # Recorded Vision pose (skeleton coords only), replayed on the Simulator so the
+      # pipeline runs there without a camera.
+      - path: DivotTests/Fixtures/sample_swing.pose.json
+        buildPhase: resources
+    dependencies:
+      - package: SwingCore
+        product: SwingCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: com.rboyarov91.divot
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME: AccentColor
+        INFOPLIST_KEY_UILaunchScreen_Generation: "YES"
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: "YES"
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: "UIInterfaceOrientationPortrait"
+        INFOPLIST_KEY_NSCameraUsageDescription: "Record your golf swing for on-device analysis."
+        INFOPLIST_KEY_NSMicrophoneUsageDescription: "Recording a swing clip includes audio."
+
+  DivotTests:
+    type: bundle.unit-test
+    platform: iOS
+    sources:
+      - path: DivotTests
+    dependencies:
+      - target: Divot
+      - package: SwingCore
+        product: SwingCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: com.rboyarov91.divot.tests
+
+  DivotUITests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources:
+      - path: DivotUITests
+    dependencies:
+      - target: Divot
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: "YES"
+        PRODUCT_BUNDLE_IDENTIFIER: com.rboyarov91.divot.uitests
+        TEST_TARGET_NAME: Divot
+
+schemes:
+  Divot:
+    build:
+      targets:
+        Divot: all
+        DivotTests: [test]
+        DivotUITests: [test]
+    test:
+      targets:
+        - DivotTests
+        - DivotUITests

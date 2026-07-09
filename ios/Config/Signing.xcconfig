@@ -1,0 +1,5 @@
+// Signing config (committed). Real values live in the gitignored Signing.local.xcconfig,
+// pulled in optionally below so CI / fresh clones still build (simulator needs no team).
+// To build on a device: copy Signing.local.template.xcconfig -> Signing.local.xcconfig
+// and set your DEVELOPMENT_TEAM.
+#include? "Signing.local.xcconfig"
