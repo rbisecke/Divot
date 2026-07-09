@@ -389,6 +389,83 @@ if let w = MotionTrigger.swingWindow(leadWristSpeed: burst, fps: 30) {
 } else { check(false, "burst series ⇒ a window") }
 check(MotionTrigger.swingWindow(leadWristSpeed: [Double](repeating: 1.0, count: 40), fps: 30) == nil, "flat series ⇒ nil")
 
+// [P2.9] MotionTrigger.step — causal (no-lookahead) live recording trigger. Feeds a speed
+// series sample-by-sample through `step`, mirroring how CaptureController.detectMotion drives
+// it from a trailing recentSpeeds buffer, and checks the resulting LiveState.recording series.
+print("[MotionTrigger.step]")
+func runLiveTrigger(_ speeds: [Double], windowSize: Int = 12, minSamples: Int = 3) -> [MotionTrigger.LiveState] {
+    var buf: [Double] = []
+    var state = MotionTrigger.LiveState()
+    var states: [MotionTrigger.LiveState] = []
+    for speed in speeds {
+        buf.append(speed); if buf.count > windowSize { buf.removeFirst() }
+        if buf.count >= minSamples {
+            let mean = buf.reduce(0, +) / Double(buf.count)
+            state = MotionTrigger.step(state, speed: speed, recentMean: mean)
+        }
+        states.append(state)
+    }
+    return states
+}
+
+// Flat noisy baseline (small jitter, no burst) never fires across the whole series.
+let flatNoise = (0..<200).map { i in 0.18 + (i % 2 == 0 ? 0.02 : -0.02) }
+check(!runLiveTrigger(flatNoise).contains(where: { $0.recording }), "flat noisy baseline never triggers recording")
+
+// The existing synthetic burst array, fed sample-by-sample, with a settled tail appended so
+// the stop condition actually has room to fire (the bare 40-sample array only reaches
+// stillCount 15, one short of the >15 needed to stop within its own length).
+let burstWithTail = burst + [Double](repeating: 0.2, count: 10)
+let burstStates = runLiveTrigger(burstWithTail)
+if let startIdx = burstStates.firstIndex(where: { $0.recording }) {
+    check(startIdx == 18, "recording starts once the rise crosses recentMean * riseFactor (idx \(startIdx))")
+    if let stopIdx = burstStates[startIdx...].firstIndex(where: { !$0.recording }) {
+        check(stopIdx - startIdx >= 8, "recording never stops before minRecordingSamples elapse (\(stopIdx - startIdx) samples)")
+    } else {
+        check(false, "burst + settled tail ⇒ recording eventually stops")
+    }
+} else {
+    check(false, "burst series ⇒ recording starts")
+}
+
+// A brief low-speed dip inside the burst window (simulating the top-of-swing pause) must not
+// stop the recording — the concrete regression test for the minRecordingSamples risk.
+var midSwingPause = [Double](repeating: 0.2, count: 20)
+midSwingPause += [1.0, 2.5, 4.0, 5.0, 6.0]            // backswing rise to a peak
+midSwingPause += [0.1, 0.1, 0.1, 0.1, 0.1]             // brief top-of-backswing pause (5 samples)
+midSwingPause += [3.0, 5.0, 7.0, 8.0, 7.0, 5.0]         // downswing, higher peak
+midSwingPause += [Double](repeating: 0.2, count: 25)    // genuine settle tail
+let pauseStates = runLiveTrigger(midSwingPause)
+if let startIdx = pauseStates.firstIndex(where: { $0.recording }) {
+    let dipRange = 25...29
+    check(dipRange.allSatisfy { pauseStates[$0].recording }, "brief mid-swing pause does not false-stop the recording")
+    if let stopIdx = pauseStates[startIdx...].firstIndex(where: { !$0.recording }) {
+        check(stopIdx > dipRange.upperBound, "recording stops only after the real settle tail, not the pause")
+    } else {
+        check(false, "genuine settle tail ⇒ recording eventually stops")
+    }
+} else {
+    check(false, "swing-with-pause series ⇒ recording starts")
+}
+
+// Two well-separated bursts back to back (idle → burst → settle → idle → burst → settle)
+// correctly produce recording=true twice, not a stuck state.
+func burstShape() -> [Double] {
+    var b = [Double](repeating: 0.2, count: 20)
+    b += [3.0, 4.0, 5.0, 6.0, 5.0, 4.0, 3.0]
+    b += [Double](repeating: 0.2, count: 25)
+    return b
+}
+let twoBurstStates = runLiveTrigger(burstShape() + burstShape())
+var startCount = 0
+var wasRecording = false
+for s in twoBurstStates {
+    if !wasRecording, s.recording { startCount += 1 }
+    wasRecording = s.recording
+}
+check(startCount == 2, "two consecutive bursts fire the trigger twice (\(startCount) starts)")
+check(!twoBurstStates.last!.recording, "settled back to idle after the second burst")
+
 // [P2.2] EventAlignment — pure.
 print("[EventAlignment]")
 let ea = SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 1.0, frame: 30),
