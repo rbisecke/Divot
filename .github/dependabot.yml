@@ -1,0 +1,12 @@
+version: 2
+updates:
+  - package-ecosystem: "swift"          # SwingCore SPM dependencies
+    directory: "/SwingCore"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5
+    groups:
+      swift: { patterns: ["*"] }
+  - package-ecosystem: "github-actions" # keep workflow actions current
+    directory: "/"
+    schedule: { interval: "weekly" }
+    open-pull-requests-limit: 5

@@ -1,0 +1,45 @@
+name: CI
+on:
+  push: { branches: [main] }
+  pull_request: {}
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  engine:                                   # T1 — headless engine golden checks
+    name: engine
+    runs-on: macos-26
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with: { xcode-version: '26' }       # latest 26.x on the image
+      - run: bash SwingCore/validate.sh
+      - run: grep -q "ALL PASS" /tmp/sc.log
+
+  app:                                      # T2 — simulator unit + UI tests
+    name: app
+    runs-on: macos-26
+    env:
+      DEST: 'platform=iOS Simulator,name=iPhone 17,OS=latest'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: maxim-lobanov/setup-xcode@v1
+        with: { xcode-version: '26' }
+      - run: brew install xcodegen xcbeautify
+      - uses: actions/cache@v4
+        with:
+          path: ~/Library/Caches/org.swift.swiftpm
+          key: spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: spm-
+      - run: xcodegen generate --spec ios/project.yml --project ios
+      - name: Test
+        run: |
+          set -o pipefail
+          NSUnbufferedIO=YES xcodebuild test \
+            -project ios/Divot.xcodeproj -scheme Divot \
+            -destination "$DEST" \
+            CODE_SIGNING_ALLOWED=NO | xcbeautify --renderer github-actions

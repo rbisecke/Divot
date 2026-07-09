@@ -1,0 +1,36 @@
+# Xcode
+xcuserdata/
+DerivedData/
+*.hmap
+*.dSYM.zip
+*.xcuserstate
+
+# Swift Package Manager
+.build/
+.swiftpm/
+# Package.resolved is committed for apps (do not ignore)
+
+# XcodeGen — the project is generated, not committed
+ios/Divot.xcodeproj/
+
+# Signing / secrets — real values live only in the local override
+ios/Config/Signing.local.xcconfig
+*.mobileprovision
+*.provisionprofile
+*.p12
+*.cer
+AuthKey_*.p8
+
+# Real media — NEVER commit personal footage (analysis is on-device only).
+# Only synthetic fixtures are allow-listed back in.
+*.mov
+*.mp4
+!ios/DivotTests/Fixtures/placeholder_swing.mov
+!ios/DivotTests/Fixtures/ball_flight_synth.mov
+
+# Claude Code
+.claude/settings.local.json
+
+# macOS / editors
+.DS_Store
+.idea/
