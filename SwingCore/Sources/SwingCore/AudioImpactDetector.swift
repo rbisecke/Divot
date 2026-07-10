@@ -24,16 +24,22 @@ public enum AudioImpactDetector {
     /// Given a short-window RMS energy envelope (`(t, energy)` pairs, one per ~5ms window),
     /// find the highest-energy sample inside `window` and return its timestamp, but only if
     /// it clears `riseFactor * mean` — mirrors `MotionTrigger.swingWindow`'s peak/mean burst
-    /// test, applied to audio energy instead of wrist speed. A silent or evenly-loud envelope
-    /// (nothing rises meaningfully above the mean) returns nil.
+    /// test, applied to audio energy instead of wrist speed. The mean is computed from the
+    /// same in-window samples as the peak search (a *local* noise floor, matching
+    /// `MotionTrigger.step`'s `recentMean`, which is always a trailing local buffer, never a
+    /// whole-clip average) — otherwise loud or quiet audio well outside `window` (walk-up
+    /// chatter, dead air before/after the swing, now that P2.8 no longer trims the recorded
+    /// clip) would skew the rise-factor bar for a transient that has nothing to do with it. A
+    /// silent or evenly-loud window (nothing rises meaningfully above the local mean) returns
+    /// nil.
     public static func strongestPeak(envelope: [(t: Double, energy: Double)],
                                      window: ClosedRange<Double>, riseFactor: Double = 2.5) -> Double? {
         guard !envelope.isEmpty else { return nil }
-        let mean = envelope.reduce(0.0) { $0 + $1.energy } / Double(envelope.count)
-        guard mean > 1e-9 else { return nil }   // silence-only floor
-
         let inWindow = envelope.filter { window.contains($0.t) }
         guard let best = inWindow.max(by: { $0.energy < $1.energy }) else { return nil }
+
+        let mean = inWindow.reduce(0.0) { $0 + $1.energy } / Double(inWindow.count)
+        guard mean > 1e-9 else { return nil }   // silence-only floor
         guard best.energy > mean * riseFactor else { return nil }
         return best.t
     }
