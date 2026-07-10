@@ -17,6 +17,9 @@ final class CaptureController: NSObject, ObservableObject,
     @Published var lastClipURL: URL?
     @Published var dtlMode = false   // false = face-on guide, true = down-the-line (side-on) guide
     @Published var cameraPosition: AVCaptureDevice.Position = .back
+    // P2.11 — live phase chip: updated at the same call site as the P2.9 trigger, from the
+    // same MotionTrigger.LiveState, so recording state and phase never disagree.
+    @Published var livePhase: SwingPhase = .address
 
     /// Pure guide selector (testable): DTL uses the side-on check, otherwise the face-on check.
     static func framing(_ joints: [SwingCore.Joint: JointPoint], dtl: Bool) -> (ok: Bool, reason: String) {
@@ -41,6 +44,8 @@ final class CaptureController: NSObject, ObservableObject,
     private var lastWristPoint: JointPoint?
     private var liveState = MotionTrigger.LiveState()
     private var frameCounter = 0
+    // P2.11 — live phase state machine, fed by the exact same speed sample as liveState above.
+    private var phaseState = LivePhaseDetector.State()
 
     func requestAndConfigure() {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
@@ -165,6 +170,12 @@ final class CaptureController: NSObject, ObservableObject,
         } else if wasRecording, !liveState.recording {
             endRecording()
         }
+
+        // P2.11 — same call site, same LiveState the trigger just produced (not a second
+        // independent speed buffer), so "is recording" and "which phase" never disagree.
+        phaseState = LivePhaseDetector.step(phaseState, speed: speed, wristY: p.y, trigger: liveState)
+        let phase = phaseState.phase
+        DispatchQueue.main.async { self.livePhase = phase }
     }
 
     private func beginRecording() {

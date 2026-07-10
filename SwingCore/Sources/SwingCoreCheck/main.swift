@@ -492,6 +492,85 @@ for s in twoBurstStates {
 check(startCount == 2, "two consecutive bursts fire the trigger twice (\(startCount) starts)")
 check(!twoBurstStates.last!.recording, "settled back to idle after the second burst")
 
+// [P2.11] LivePhaseDetector — pure, causal swing-phase classification. Driven in lockstep with
+// MotionTrigger.step, exactly as CaptureController.detectMotion drives both from one shared
+// LiveState (see LivePhaseDetector.swift's step doc for the one deviation from the design
+// sketch: the impact test compares against the peak *before* updating it, not after).
+print("[LivePhaseDetector]")
+struct PhaseRun { let phases: [SwingPhase]; let recording: [Bool] }
+func runPhaseDetector(speeds: [Double], wristYs: [Double], windowSize: Int = 12, minSamples: Int = 6) -> PhaseRun {
+    var buf: [Double] = []
+    var triggerState = MotionTrigger.LiveState()
+    var phaseState = LivePhaseDetector.State()
+    var phases: [SwingPhase] = []
+    var recordingFlags: [Bool] = []
+    for (speed, wristY) in zip(speeds, wristYs) {
+        buf.append(speed); if buf.count > windowSize { buf.removeFirst() }
+        if buf.count >= minSamples {
+            let mean = buf.reduce(0, +) / Double(buf.count)
+            triggerState = MotionTrigger.step(triggerState, speed: speed, recentMean: mean)
+        }
+        phaseState = LivePhaseDetector.step(phaseState, speed: speed, wristY: wristY, trigger: triggerState)
+        phases.append(phaseState.phase)
+        recordingFlags.append(triggerState.recording)
+    }
+    return PhaseRun(phases: phases, recording: recordingFlags)
+}
+
+// A flat/no-motion series never leaves .address (recording never starts, so the detector's
+// idle guard keeps resetting it every sample).
+let flatPhaseRun = runPhaseDetector(speeds: [Double](repeating: 0.2, count: 60),
+                                     wristYs: [Double](repeating: 0.3, count: 60))
+check(flatPhaseRun.phases.allSatisfy { $0 == .address }, "flat series never leaves .address")
+
+// A clean synthetic swing: idle → slow backswing rise/fall → top pause → fast downswing burst →
+// deceleration → settle. wristY rises through the backswing (Vision convention: y increases
+// upward) and falls through the downswing, mirroring real swing kinematics closely enough to
+// exercise every transition.
+func syntheticSwingSpeeds() -> [Double] {
+    var s = [Double](repeating: 0.2, count: 20)     // idle
+    s += [0.4, 0.6, 0.8, 1.0, 1.0, 0.8, 0.6, 0.4]    // backswing
+    s += [0.2, 0.2, 0.2]                             // top-of-backswing pause
+    s += [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]             // downswing acceleration into impact
+    s += [8.0, 5.0, 3.0, 1.0, 0.3]                   // post-impact deceleration
+    s += [Double](repeating: 0.2, count: 25)         // settle tail
+    return s
+}
+func syntheticSwingWristY() -> [Double] {
+    var y = [Double](repeating: 0.3, count: 20)              // idle, address height
+    y += [0.35, 0.4, 0.5, 0.6, 0.7, 0.75, 0.75, 0.75]         // rising through backswing
+    y += [0.75, 0.75, 0.74]                                   // top-of-backswing pause
+    y += [0.65, 0.55, 0.45, 0.35, 0.3, 0.28]                  // descending through downswing
+    y += [0.25, 0.22, 0.2, 0.2, 0.2]                          // finish, settled low
+    y += [Double](repeating: 0.2, count: 25)                  // settle tail
+    return y
+}
+let swingRun = runPhaseDetector(speeds: syntheticSwingSpeeds(), wristYs: syntheticSwingWristY())
+let expectedOrder: [SwingPhase] = [.address, .backswing, .transition, .downswing, .impact, .finish]
+var runs: [SwingPhase] = []
+for p in swingRun.phases where runs.last != p { runs.append(p) }
+check(runs.count >= expectedOrder.count, "clean burst visits every phase (\(runs))")
+check(Array(runs.prefix(expectedOrder.count)) == expectedOrder,
+      "clean burst visits phases in order with no backward jump (\(runs))")
+if runs.count > expectedOrder.count {
+    check(runs.count == expectedOrder.count + 1 && runs[expectedOrder.count] == .address,
+          "the only allowed backward jump is the final reset to .address once recording stops (\(runs))")
+}
+
+// Two consecutive bursts (idle → swing → idle → swing) each independently reach .backswing and
+// .finish, i.e. two full cycles rather than a stuck state.
+let doubleRun = runPhaseDetector(speeds: syntheticSwingSpeeds() + syntheticSwingSpeeds(),
+                                  wristYs: syntheticSwingWristY() + syntheticSwingWristY())
+var backswingEntries = 0, finishEntries = 0
+var prevPhase = SwingPhase.address
+for p in doubleRun.phases {
+    if p == .backswing, prevPhase != .backswing { backswingEntries += 1 }
+    if p == .finish, prevPhase != .finish { finishEntries += 1 }
+    prevPhase = p
+}
+check(backswingEntries == 2, "two consecutive bursts start two independent backswing phases (\(backswingEntries))")
+check(finishEntries == 2, "two consecutive bursts each independently reach .finish (\(finishEntries))")
+
 // [P2.2] EventAlignment — pure.
 print("[EventAlignment]")
 let ea = SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 1.0, frame: 30),
