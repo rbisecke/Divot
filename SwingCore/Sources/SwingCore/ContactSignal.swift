@@ -21,17 +21,29 @@ public enum ContactEvaluator {
     /// `flightDetected`: BallFlightTracer found a post-impact trajectory.
     /// `ballStillAtAddressSpot`: a fresh BallDetector pass on a post-impact frame still finds
     /// a ball blob within a small radius of `ballAtAddress` (i.e., it never moved).
+    /// `audioTransientAtImpact`: P3.6 — AudioImpactDetector found its strongest transient
+    /// within tolerance of the detected impact frame. Independent of the vision signals above
+    /// (doesn't need a ball to have been found at all), so it's OR'd in afterward rather than
+    /// folded into the vision-only branches: either signal firing is enough to call contact,
+    /// matching the same default-to-true, soft-label bias this evaluator already encodes.
     public static func evaluate(ballAtAddress: CGPoint?, flightDetected: Bool,
-                                 ballStillAtAddressSpot: Bool) -> ContactSignal {
-        guard ballAtAddress != nil else {
-            return ContactSignal(likelyContact: true, reason: "no ball detected — not evaluated")
+                                 ballStillAtAddressSpot: Bool,
+                                 audioTransientAtImpact: Bool = false) -> ContactSignal {
+        let visual: ContactSignal
+        if ballAtAddress == nil {
+            visual = ContactSignal(likelyContact: true, reason: "no ball detected — not evaluated")
+        } else if flightDetected {
+            visual = ContactSignal(likelyContact: true, reason: "ball flight traced")
+        } else if ballStillAtAddressSpot {
+            visual = ContactSignal(likelyContact: false, reason: "no contact detected")
+        } else {
+            visual = ContactSignal(likelyContact: true, reason: "ambiguous — assumed contact")
         }
-        if flightDetected {
-            return ContactSignal(likelyContact: true, reason: "ball flight traced")
+
+        guard audioTransientAtImpact else { return visual }
+        if visual.reason == "ball flight traced" {
+            return ContactSignal(likelyContact: true, reason: "ball flight traced & audio transient at impact")
         }
-        if ballStillAtAddressSpot {
-            return ContactSignal(likelyContact: false, reason: "no contact detected")
-        }
-        return ContactSignal(likelyContact: true, reason: "ambiguous — assumed contact")
+        return ContactSignal(likelyContact: true, reason: "audio transient at impact")
     }
 }

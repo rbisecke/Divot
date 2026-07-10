@@ -61,7 +61,12 @@ final class CaptureController: NSObject, ObservableObject,
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard let self else { return }
             if !granted { DispatchQueue.main.async { self.permissionDenied = true }; return }
-            self.sessionQueue.async { self.configure() }
+            // P3.6 — mic access is best-effort: if it's denied, still configure and record
+            // video-only rather than blocking the whole recorder on a permission that's only
+            // needed for the experimental audio-contact signal.
+            AVCaptureDevice.requestAccess(for: .audio) { _ in
+                self.sessionQueue.async { self.configure() }
+            }
         }
     }
 
@@ -72,6 +77,7 @@ final class CaptureController: NSObject, ObservableObject,
         guard addCameraInput(position: cameraPosition) else {
             session.commitConfiguration(); return
         }
+        addAudioInput()
         videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "capture.frames"))
         if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
         if session.canAddOutput(movieOutput) { session.addOutput(movieOutput) }
@@ -112,6 +118,17 @@ final class CaptureController: NSObject, ObservableObject,
             DispatchQueue.main.async { self.liveVideoSize = portraitSize }
         }
         return true
+    }
+
+    /// P3.6 — add the default microphone so the recorded `.mov` carries an audio track for
+    /// `AudioImpactDetector`'s contact-transient check. Best-effort: silently skipped if no
+    /// mic is available or the input can't be added (video-only recording still works either
+    /// way). Not swapped on camera flip like the video input — there's only ever one mic.
+    private func addAudioInput() {
+        guard let device = AVCaptureDevice.default(for: .audio),
+              let input = try? AVCaptureDeviceInput(device: device),
+              session.canAddInput(input) else { return }
+        session.addInput(input)
     }
 
     /// Flip between the back and front cameras (ignored mid-recording). Falls back to the current

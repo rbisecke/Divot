@@ -8,8 +8,8 @@ import CoreGraphics
 public enum SwingAnalyzer {
 
     /// Analyze an already-extracted pose sequence (one swing). `videoURL`, when supplied,
-    /// enables the P3.5 ball-contact soft-label signal (best-effort; nil when omitted, same
-    /// as `plane`/`comparison`).
+    /// enables the P3.5 ball-contact soft-label signal (vision) and its P3.6 audio-transient
+    /// vote (best-effort; nil when omitted, same as `plane`/`comparison`).
     public static func analyze(_ pose: PoseSequence, club: ClubSpec, angle: Angle, hand: Hand = .right, index: Int = 1,
                                videoURL: URL? = nil) -> SwingAnalysis {
         let ev = EventDetector.detect(pose, hand: hand)
@@ -57,10 +57,11 @@ public enum SwingAnalyzer {
                      frames: pose.frames.filter { $0.t >= from && $0.t <= to })
     }
 
-    /// P3.5 glue: pulls the address + a post-impact still from `videoURL` and runs the
-    /// already-existing `BallDetector`/`BallFlightTracer` best-effort passes, then hands the
-    /// results to the pure `ContactEvaluator`. Device-gated like its inputs; degrades to
-    /// "not evaluated" (not a crash) when a frame or ball can't be read.
+    /// P3.5/P3.6 glue: pulls the address + a post-impact still from `videoURL` and runs the
+    /// already-existing `BallDetector`/`BallFlightTracer` best-effort passes, plus (P3.6) the
+    /// `AudioImpactDetector` transient check over the same clip, then hands everything to the
+    /// pure `ContactEvaluator`. Device-gated like its inputs; degrades to "not evaluated" (not
+    /// a crash) when a frame, ball, or audio track can't be read.
     private static func evaluateContact(videoURL: URL, events: SwingEvents) -> ContactSignal {
         let gen = AVAssetImageGenerator(asset: AVURLAsset(url: videoURL))
         gen.appliesPreferredTrackTransform = true
@@ -80,8 +81,17 @@ public enum SwingAnalyzer {
             ballStillAtAddressSpot = (dx * dx + dy * dy).squareRoot() < 0.03   // small radius, normalized coords
         }
 
+        // P3.6 — independent audio vote: strongest transient in [address, finish], within
+        // ±0.05s of the already-detected impact frame counts as an audio-confirmed contact.
+        var audioTransientAtImpact = false
+        if events.finish.t > events.address.t,
+           let peak = AudioImpactDetector.peakTransient(videoURL: videoURL, window: events.address.t...events.finish.t) {
+            audioTransientAtImpact = abs(peak - events.impact.t) <= 0.05
+        }
+
         return ContactEvaluator.evaluate(ballAtAddress: ballAtAddress, flightDetected: flight.detected,
-                                         ballStillAtAddressSpot: ballStillAtAddressSpot)
+                                         ballStillAtAddressSpot: ballStillAtAddressSpot,
+                                         audioTransientAtImpact: audioTransientAtImpact)
     }
 }
 
