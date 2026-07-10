@@ -116,13 +116,19 @@ struct ImportView: View {
             .fullScreenCover(isPresented: $showCapture) {
                 CaptureView { url in
                     pickedURL = url
-                    // P2.10 — summary note: cheap to read straight from the recorded file,
-                    // no CaptureController state needed for it.
-                    let secs = CMTimeGetSeconds(AVURLAsset(url: url).duration)
-                    if secs.isFinite, secs > 0 {
-                        detectedNote = String(format: "Swing captured — %.1fs.", secs)
+                    Task {
+                        // detectAngle clears detectedNote as its first step (and may set its
+                        // own angle note), so the capture summary must be set after it
+                        // finishes, not before — otherwise detectAngle's async completion
+                        // immediately clobbers it and the note never actually shows.
+                        await detectAngle(url)
+                        // P2.10 — summary note: cheap to read straight from the recorded file,
+                        // no CaptureController state needed for it.
+                        let secs = CMTimeGetSeconds(AVURLAsset(url: url).duration)
+                        if secs.isFinite, secs > 0 {
+                            detectedNote = String(format: "Swing captured — %.1fs.", secs)
+                        }
                     }
-                    Task { await detectAngle(url) }
                 }
             }
             // D3 — success haptic when analysis finishes (busy true → false)
