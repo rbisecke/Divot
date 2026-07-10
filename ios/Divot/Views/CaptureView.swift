@@ -13,6 +13,12 @@ struct CaptureView: View {
         ZStack {
             CameraPreview(session: cap.session).ignoresSafeArea()
 
+            // P2.12 — live skeleton overlay, drawn from the same throttled sample cadence as
+            // pose sampling (every 3rd camera frame); never intercepts touches.
+            LiveSkeletonOverlay(joints: cap.liveJoints, videoSize: cap.liveVideoSize)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
+
             // Framing guide: silhouette frame turns green when the body is fully in view.
             RoundedRectangle(cornerRadius: 24)
                 .stroke(cap.framingOK ? Color.green : Color.white.opacity(0.6),
