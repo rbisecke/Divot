@@ -737,6 +737,20 @@ check(cpath.points.allSatisfy { $0.pos.x.isFinite && $0.pos.y.isFinite }, "C5 cl
 check(cpath.coverage > 0 && cpath.coverage <= 1, "C5 coverage in (0,1] (\(cpath.coverage))")
 check(ClubTracker.path(detections: []).points.isEmpty, "C5 empty detections ⇒ empty")
 
+// [P3.5] ContactEvaluator — pure combinator, default-to-true bias on every ambiguous branch.
+print("[ContactEvaluator]")
+let noBall = ContactEvaluator.evaluate(ballAtAddress: nil, flightDetected: false, ballStillAtAddressSpot: false)
+check(noBall.likelyContact && noBall.reason == "no ball detected — not evaluated", "no ball found ⇒ true/not evaluated")
+
+let flightSeen = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: true, ballStillAtAddressSpot: false)
+check(flightSeen.likelyContact && flightSeen.reason == "ball flight traced", "ball + flight ⇒ true/ball flight traced")
+
+let stillThere = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: false, ballStillAtAddressSpot: true)
+check(!stillThere.likelyContact && stillThere.reason == "no contact detected", "ball + still present ⇒ false/no contact detected")
+
+let ambiguous = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: false, ballStillAtAddressSpot: false)
+check(ambiguous.likelyContact && ambiguous.reason == "ambiguous — assumed contact", "ball + neither ⇒ true/ambiguous assumed contact")
+
 do {
     let plane = PlaneAnalysis(plane: SwingLine(a: CGPoint(x: 0, y: 0.2), b: CGPoint(x: 1, y: 0.8)),
                               overTheTop: true, maxAbovePlane: 0.42, source: "hand", downswingPath: [CGPoint(x: 0.2, y: 0.5)])
