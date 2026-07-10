@@ -2,6 +2,7 @@
 // P2.1 — guided recorder UI. DEVICE-GATED (no camera on the Simulator).
 import SwiftUI
 import AVFoundation
+import SwingCore
 
 struct CaptureView: View {
     var onCaptured: (URL) -> Void
@@ -39,6 +40,12 @@ struct CaptureView: View {
                     Label("Recording…", systemImage: "record.circle").foregroundStyle(.red)
                         .symbolEffect(.pulse)   // D1 — animate the recording indicator
                         .padding(8).background(.black.opacity(0.5), in: Capsule())
+                    // P2.11 — live swing-phase chip, causally detected from the same speed
+                    // sample as the recording trigger (see LivePhaseDetector).
+                    Text(cap.livePhase.rawValue.capitalized)
+                        .font(.footnote).foregroundStyle(.white)
+                        .padding(8).background(.black.opacity(0.5), in: Capsule())
+                        .padding(.top, 6)
                 } else {
                     Text("Make your swing — recording starts automatically")
                         .font(.footnote).foregroundStyle(.white)
