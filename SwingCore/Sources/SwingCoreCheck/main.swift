@@ -448,6 +448,32 @@ if let startIdx = pauseStates.firstIndex(where: { $0.recording }) {
     check(false, "swing-with-pause series ⇒ recording starts")
 }
 
+// Direct check of the minRecordingSamples guard's AND-logic, in isolation. With the shipped
+// defaults (minRecordingSamples: 8 < settleSamples: 15) samplesSinceStart >= stillCount always
+// holds by construction (stillCount only advances alongside samplesSinceStart, or resets), so
+// stillCount can never exceed settleSamples while samplesSinceStart is still under
+// minRecordingSamples — meaning no sample-by-sample series fed through `step` (like the two
+// checks above) can actually exercise the guard clause failing to withhold a stop. Construct a
+// LiveState directly instead, so the guard itself is proven correct independent of whether
+// today's constants make it reachable in practice.
+var earlyPause = MotionTrigger.LiveState()
+earlyPause.recording = true
+earlyPause.peakSpeed = 10.0
+earlyPause.stillCount = 20         // already past settleSamples (15)
+earlyPause.samplesSinceStart = 3   // still well under minRecordingSamples (8)
+let withheld = MotionTrigger.step(earlyPause, speed: 0.1, recentMean: 3.0)
+check(withheld.recording, "stop is withheld while samplesSinceStart < minRecordingSamples, even with stillCount already past settleSamples")
+
+var atFloor = earlyPause
+atFloor.samplesSinceStart = 6   // becomes 7 after this step's increment, one short of minRecordingSamples (8)
+let stillWithheld = MotionTrigger.step(atFloor, speed: 0.1, recentMean: 3.0)
+check(stillWithheld.recording, "stop is still withheld the sample before samplesSinceStart reaches minRecordingSamples")
+
+var atThreshold = earlyPause
+atThreshold.samplesSinceStart = 7   // becomes exactly minRecordingSamples (8) after this step's increment
+let fires = MotionTrigger.step(atThreshold, speed: 0.1, recentMean: 3.0)
+check(!fires.recording, "stop fires once samplesSinceStart reaches minRecordingSamples with stillCount already past settleSamples")
+
 // Two well-separated bursts back to back (idle → burst → settle → idle → burst → settle)
 // correctly produce recording=true twice, not a stuck state.
 func burstShape() -> [Double] {

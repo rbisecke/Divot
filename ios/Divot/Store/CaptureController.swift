@@ -130,14 +130,14 @@ final class CaptureController: NSObject, ObservableObject,
         }
         let guide = Self.framing(joints, dtl: dtlMode)
         DispatchQueue.main.async { self.framingOK = guide.ok; self.framingReason = guide.reason }
-        detectMotion(leadWrist: joints[.leftWrist])
+        detectMotion(leadWrist: joints[.leftWrist], framingOK: guide.ok)
     }
 
     /// P2.9 — causal speed/burst trigger. Tracks frame-to-frame lead-wrist displacement
     /// magnitude in a trailing buffer and hands each new sample to `MotionTrigger.step`,
     /// which owns the actual start/stop decision; `beginRecording()`/`endRecording()` fire
     /// exactly on the state machine's false→true / true→false `recording` transitions.
-    private func detectMotion(leadWrist: JointPoint?) {
+    private func detectMotion(leadWrist: JointPoint?, framingOK: Bool) {
         guard let p = leadWrist else { return }
         let speed: Double
         if let last = lastWristPoint {
@@ -150,6 +150,12 @@ final class CaptureController: NSObject, ObservableObject,
 
         recentSpeeds.append(speed); if recentSpeeds.count > 12 { recentSpeeds.removeFirst() }
         guard recentSpeeds.count >= 6 else { return }
+
+        // Only allow a fresh recording to start while properly framed (matches the pre-P2.9
+        // span heuristic's framingOK gate, dropped by accident in the rewire). Once recording,
+        // framing no longer gates anything, so a brief framing loss mid-swing can't touch it.
+        guard liveState.recording || framingOK else { return }
+
         let recentMean = recentSpeeds.reduce(0, +) / Double(recentSpeeds.count)
 
         let wasRecording = liveState.recording
