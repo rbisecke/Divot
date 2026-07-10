@@ -3,6 +3,7 @@ import SwiftUI
 import SwiftData
 import PhotosUI
 import UniformTypeIdentifiers
+import AVFoundation
 import SwingCore
 
 /// Pick a swing video, choose club/angle, and run the on-device analysis.
@@ -113,7 +114,16 @@ struct ImportView: View {
                 ResultsView(saved: saved)
             }
             .fullScreenCover(isPresented: $showCapture) {
-                CaptureView { url in pickedURL = url; Task { await detectAngle(url) } }
+                CaptureView { url in
+                    pickedURL = url
+                    // P2.10 — summary note: cheap to read straight from the recorded file,
+                    // no CaptureController state needed for it.
+                    let secs = CMTimeGetSeconds(AVURLAsset(url: url).duration)
+                    if secs.isFinite, secs > 0 {
+                        detectedNote = String(format: "Swing captured — %.1fs.", secs)
+                    }
+                    Task { await detectAngle(url) }
+                }
             }
             // D3 — success haptic when analysis finishes (busy true → false)
             .sensoryFeedback(.success, trigger: store.busy) { old, new in old && !new }
