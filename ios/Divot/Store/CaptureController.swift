@@ -2,6 +2,7 @@
 // P2.1 — in-app guided recorder. DEVICE-GATED: compiles on the Simulator but capture
 // and live pose only run on a real iPhone (Simulator has no camera / body-pose model).
 import Foundation
+import CoreGraphics
 import AVFoundation
 import Vision
 import SwingCore
@@ -20,6 +21,15 @@ final class CaptureController: NSObject, ObservableObject,
     // P2.11 — live phase chip: updated at the same call site as the P2.9 trigger, from the
     // same MotionTrigger.LiveState, so recording state and phase never disagree.
     @Published var livePhase: SwingPhase = .address
+    // P2.12 — live skeleton overlay: the exact joints dictionary captureOutput already builds
+    // every sampled frame, just also published instead of only used locally.
+    @Published var liveJoints: [SwingCore.Joint: JointPoint] = [:]
+    // P2.12 — the active format's dimensions, oriented to match liveJoints' own coordinate
+    // space (portrait — this app is portrait-locked, and AVCaptureVideoPreviewLayer rotates
+    // the camera's native landscape-shaped buffer to match before applying videoGravity).
+    // LiveSkeletonOverlay needs this to do real .resizeAspectFill crop math instead of a naive
+    // x*width, y*height scale. .zero until the camera reports a format.
+    @Published var liveVideoSize: CGSize = .zero
 
     /// Pure guide selector (testable): DTL uses the side-on check, otherwise the face-on check.
     static func framing(_ joints: [SwingCore.Joint: JointPoint], dtl: Bool) -> (ok: Bool, reason: String) {
@@ -91,6 +101,15 @@ final class CaptureController: NSObject, ObservableObject,
             device.activeVideoMaxFrameDuration = dur
             device.unlockForConfiguration()
             DispatchQueue.main.async { self.highFps = fps >= 120 }
+
+            // P2.12 — publish the active format's dimensions, swapped to portrait: the raw
+            // sensor format is landscape-shaped, but the preview (and this portrait-only app)
+            // display it rotated, so the fill-crop math needs the displayed size, not the
+            // sensor's raw width/height order.
+            let dims = CMVideoFormatDescriptionGetDimensions(best.formatDescription)
+            let portraitSize = CGSize(width: CGFloat(min(dims.width, dims.height)),
+                                      height: CGFloat(max(dims.width, dims.height)))
+            DispatchQueue.main.async { self.liveVideoSize = portraitSize }
         }
         return true
     }
@@ -134,7 +153,11 @@ final class CaptureController: NSObject, ObservableObject,
             }
         }
         let guide = Self.framing(joints, dtl: dtlMode)
-        DispatchQueue.main.async { self.framingOK = guide.ok; self.framingReason = guide.reason }
+        DispatchQueue.main.async {
+            self.framingOK = guide.ok
+            self.framingReason = guide.reason
+            self.liveJoints = joints   // P2.12 — same throttled cadence as pose sampling above
+        }
         detectMotion(leadWrist: joints[.leftWrist], framingOK: guide.ok)
     }
 
