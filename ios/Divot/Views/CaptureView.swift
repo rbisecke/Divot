@@ -80,6 +80,9 @@ struct CaptureView: View {
         .onChange(of: cap.lastClipURL) { _, url in
             if let url { onCaptured(url); dismiss() }
         }
+        // P2.10 — start/stop haptics: light tap when recording begins, success tap when it ends.
+        .sensoryFeedback(.impact(weight: .light), trigger: cap.isRecording) { old, new in !old && new }
+        .sensoryFeedback(.success, trigger: cap.isRecording) { old, new in old && !new }
     }
 }
 
