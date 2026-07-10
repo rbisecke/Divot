@@ -35,10 +35,12 @@ final class CaptureController: NSObject, ObservableObject,
     private var currentInput: AVCaptureDeviceInput?
     private var configured = false
 
-    // motion auto-record state (lead-wrist vertical position over recent frames)
-    private var recentWristY: [Double] = []
+    // P2.9 — motion auto-record state: a trailing lead-wrist speed buffer feeding the
+    // causal MotionTrigger.step burst detector (replaces the old positional-span heuristic).
+    private var recentSpeeds: [Double] = []
+    private var lastWristPoint: JointPoint?
+    private var liveState = MotionTrigger.LiveState()
     private var frameCounter = 0
-    private var settleCounter = 0
 
     func requestAndConfigure() {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
@@ -127,21 +129,41 @@ final class CaptureController: NSObject, ObservableObject,
             }
         }
         let guide = Self.framing(joints, dtl: dtlMode)
-        let leadY = joints[.leftWrist]?.y
         DispatchQueue.main.async { self.framingOK = guide.ok; self.framingReason = guide.reason }
-        detectMotion(leadWristY: leadY, framingOK: guide.ok)
+        detectMotion(leadWrist: joints[.leftWrist], framingOK: guide.ok)
     }
 
-    private func detectMotion(leadWristY: Double?, framingOK: Bool) {
-        guard let y = leadWristY else { return }
-        recentWristY.append(y); if recentWristY.count > 12 { recentWristY.removeFirst() }
-        guard recentWristY.count >= 6 else { return }
-        let span = (recentWristY.max() ?? 0) - (recentWristY.min() ?? 0)
-        if !isRecording, framingOK, span > 0.20 {           // a swing started
+    /// P2.9 — causal speed/burst trigger. Tracks frame-to-frame lead-wrist displacement
+    /// magnitude in a trailing buffer and hands each new sample to `MotionTrigger.step`,
+    /// which owns the actual start/stop decision; `beginRecording()`/`endRecording()` fire
+    /// exactly on the state machine's false→true / true→false `recording` transitions.
+    private func detectMotion(leadWrist: JointPoint?, framingOK: Bool) {
+        guard let p = leadWrist else { return }
+        let speed: Double
+        if let last = lastWristPoint {
+            let dx = p.x - last.x, dy = p.y - last.y
+            speed = (dx * dx + dy * dy).squareRoot()
+        } else {
+            speed = 0
+        }
+        lastWristPoint = p
+
+        recentSpeeds.append(speed); if recentSpeeds.count > 12 { recentSpeeds.removeFirst() }
+        guard recentSpeeds.count >= 6 else { return }
+
+        // Only allow a fresh recording to start while properly framed (matches the pre-P2.9
+        // span heuristic's framingOK gate, dropped by accident in the rewire). Once recording,
+        // framing no longer gates anything, so a brief framing loss mid-swing can't touch it.
+        guard liveState.recording || framingOK else { return }
+
+        let recentMean = recentSpeeds.reduce(0, +) / Double(recentSpeeds.count)
+
+        let wasRecording = liveState.recording
+        liveState = MotionTrigger.step(liveState, speed: speed, recentMean: recentMean)
+        if !wasRecording, liveState.recording {
             beginRecording()
-        } else if isRecording {
-            if span < 0.03 { settleCounter += 1 } else { settleCounter = 0 }
-            if settleCounter > 15 { endRecording() }         // motion settled → stop
+        } else if wasRecording, !liveState.recording {
+            endRecording()
         }
     }
 
@@ -153,7 +175,6 @@ final class CaptureController: NSObject, ObservableObject,
     }
 
     private func endRecording() {
-        settleCounter = 0
         if movieOutput.isRecording { movieOutput.stopRecording() }
     }
 

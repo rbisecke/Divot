@@ -28,3 +28,36 @@ public enum MotionTrigger {
         return (Swift.max(0, start - pre), Swift.min(n - 1, end + post))
     }
 }
+
+public extension MotionTrigger {
+    /// Causal (no-lookahead) recording state for the live recorder. The caller owns
+    /// `recentSpeeds` (a short trailing buffer of lead-wrist speed) and this state; `step`
+    /// is a pure decision given a new sample. Mirrors `swingWindow`'s peak/mean burst test,
+    /// but incremental so it can decide mid-recording instead of over a finished clip.
+    struct LiveState: Equatable, Sendable {
+        public var recording = false
+        public var peakSpeed = 0.0        // highest speed seen since recording started
+        public var stillCount = 0         // consecutive samples at/under the settle ratio
+        public var samplesSinceStart = 0  // guards against stopping during a real mid-swing pause
+        public init() {}
+    }
+
+    static func step(_ state: LiveState, speed: Double, recentMean: Double,
+                     riseFactor: Double = 3.0, settleRatio: Double = 0.12,
+                     settleSamples: Int = 15, minRecordingSamples: Int = 8) -> LiveState {
+        var s = state
+        if !s.recording {
+            if recentMean > 1e-6, speed > recentMean * riseFactor {
+                s = LiveState(); s.recording = true; s.peakSpeed = speed
+            }
+            return s
+        }
+        s.samplesSinceStart += 1
+        s.peakSpeed = max(s.peakSpeed, speed)
+        s.stillCount = speed < s.peakSpeed * settleRatio ? s.stillCount + 1 : 0
+        if s.samplesSinceStart >= minRecordingSamples, s.stillCount > settleSamples {
+            return LiveState()   // reset to idle
+        }
+        return s
+    }
+}
