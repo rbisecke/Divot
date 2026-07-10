@@ -751,6 +751,46 @@ check(!stillThere.likelyContact && stillThere.reason == "no contact detected", "
 let ambiguous = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: false, ballStillAtAddressSpot: false)
 check(ambiguous.likelyContact && ambiguous.reason == "ambiguous — assumed contact", "ball + neither ⇒ true/ambiguous assumed contact")
 
+// [P3.6] ContactEvaluator + audioTransientAtImpact — OR combination. The four checks above
+// all omit the new parameter (defaults to false), so they already cover "audio doesn't fire ⇒
+// vision-only behavior unchanged"; these cover the OR itself.
+let audioFlipsNoContact = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: false,
+                                                    ballStillAtAddressSpot: true, audioTransientAtImpact: true)
+check(audioFlipsNoContact.likelyContact && audioFlipsNoContact.reason == "audio transient at impact",
+      "audio fires over 'still present' ⇒ true/audio transient at impact")
+
+let audioAndFlight = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: true,
+                                               ballStillAtAddressSpot: false, audioTransientAtImpact: true)
+check(audioAndFlight.likelyContact && audioAndFlight.reason == "ball flight traced & audio transient at impact",
+      "flight + audio both fire ⇒ true/combined reason")
+
+// [P3.6] AudioImpactDetector.strongestPeak — pure envelope peak-picking, mirrors
+// MotionTrigger's riseFactor burst test applied to audio energy instead of wrist speed.
+print("[AudioImpactDetector]")
+
+let silence: [(t: Double, energy: Double)] = stride(from: 0.0, to: 1.0, by: 0.005).map { (t: $0, energy: 0.0) }
+check(AudioImpactDetector.strongestPeak(envelope: silence, window: 0.0...1.0) == nil, "silence-only ⇒ nil, never reports a peak")
+
+var impulseEnvelope: [(t: Double, energy: Double)] = stride(from: 0.0, to: 1.0, by: 0.005).map { (t: $0, energy: 0.01) }
+let impulseTime = 0.5
+if let idx = impulseEnvelope.firstIndex(where: { abs($0.t - impulseTime) < 0.0026 }) {
+    impulseEnvelope[idx].energy = 0.9
+}
+if let peak = AudioImpactDetector.strongestPeak(envelope: impulseEnvelope, window: 0.0...1.0) {
+    check(abs(peak - impulseTime) <= 0.005, "sharp impulse ⇒ peak within one sample-window of injected time (\(peak) ≈ \(impulseTime))")
+} else {
+    check(false, "sharp impulse ⇒ peak within one sample-window of injected time (got nil)")
+}
+
+let ambientNoise: [(t: Double, energy: Double)] = stride(from: 0.0, to: 1.0, by: 0.005).map { (t: $0, energy: 0.12) }
+check(AudioImpactDetector.strongestPeak(envelope: ambientNoise, window: 0.0...1.0) == nil,
+      "evenly-loud ambient noise ⇒ nil, doesn't false-trigger")
+
+var outsideWindowImpulse: [(t: Double, energy: Double)] = stride(from: 0.0, to: 1.0, by: 0.005).map { (t: $0, energy: 0.01) }
+if let idx = outsideWindowImpulse.firstIndex(where: { abs($0.t - 0.9) < 0.0026 }) { outsideWindowImpulse[idx].energy = 0.9 }
+check(AudioImpactDetector.strongestPeak(envelope: outsideWindowImpulse, window: 0.0...0.5) == nil,
+      "impulse outside window ⇒ nil, only in-window candidates considered")
+
 do {
     let plane = PlaneAnalysis(plane: SwingLine(a: CGPoint(x: 0, y: 0.2), b: CGPoint(x: 1, y: 0.8)),
                               overTheTop: true, maxAbovePlane: 0.42, source: "hand", downswingPath: [CGPoint(x: 0.2, y: 0.5)])
