@@ -1,4 +1,4 @@
-# Experimental features (P3.2 – P3.4)
+# Experimental features (P3.2 – P3.5)
 
 These are **wired but not validated**. They compile against the iOS SDK and are reachable
 behind the Settings → *Experimental features* toggle (default off), but they need a real
@@ -25,6 +25,16 @@ Nothing here is on the critical path: P1, P2, and the P3 CSV import all work wit
 ## P3.4 — DockKit motorized stand
 - API: `DockKit` (guarded with `#if canImport(DockKit)`), no-op without a paired accessory.
 - Enable bar: validated manually with the physical gimbal.
+
+## P3.5 — Ball-contact soft-label (vision-only)
+- API: combines the existing `BallDetector` (address-frame + post-impact classical CV blob
+  find) and `BallFlightTracer` (`VNDetectTrajectoriesRequest`) into a `ContactSignal` — a
+  best-effort "was the ball actually struck" label shown in History, never a hard filter.
+- Why soft-label only: an unproven "no contact detected" is a false-negative risk even behind
+  the Experimental toggle, so it's metadata-only — no auto-delete, no exclusion from analysis.
+- Enable bar: on a labeled on-device test set, correctly flags **>= 70%** of real-contact
+  swings as contact, and **>= 70%** of practice swings as no-contact. If it doesn't clear that
+  bar, don't call the evaluator at all — leave `contact` nil/uncalled and document the finding.
 
 ## How to validate on device
 Connect an iPhone, set signing (team already configured), then:

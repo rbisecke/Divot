@@ -2,6 +2,7 @@
 // P2.1 — guided recorder UI. DEVICE-GATED (no camera on the Simulator).
 import SwiftUI
 import AVFoundation
+import SwingCore
 
 struct CaptureView: View {
     var onCaptured: (URL) -> Void
@@ -11,6 +12,12 @@ struct CaptureView: View {
     var body: some View {
         ZStack {
             CameraPreview(session: cap.session).ignoresSafeArea()
+
+            // P2.12 — live skeleton overlay, drawn from the same throttled sample cadence as
+            // pose sampling (every 3rd camera frame); never intercepts touches.
+            LiveSkeletonOverlay(joints: cap.liveJoints, videoSize: cap.liveVideoSize)
+                .ignoresSafeArea()
+                .allowsHitTesting(false)
 
             // Framing guide: silhouette frame turns green when the body is fully in view.
             RoundedRectangle(cornerRadius: 24)
@@ -39,6 +46,12 @@ struct CaptureView: View {
                     Label("Recording…", systemImage: "record.circle").foregroundStyle(.red)
                         .symbolEffect(.pulse)   // D1 — animate the recording indicator
                         .padding(8).background(.black.opacity(0.5), in: Capsule())
+                    // P2.11 — live swing-phase chip, causally detected from the same speed
+                    // sample as the recording trigger (see LivePhaseDetector).
+                    Text(cap.livePhase.rawValue.capitalized)
+                        .font(.footnote).foregroundStyle(.white)
+                        .padding(8).background(.black.opacity(0.5), in: Capsule())
+                        .padding(.top, 6)
                 } else {
                     Text("Make your swing — recording starts automatically")
                         .font(.footnote).foregroundStyle(.white)
@@ -80,6 +93,9 @@ struct CaptureView: View {
         .onChange(of: cap.lastClipURL) { _, url in
             if let url { onCaptured(url); dismiss() }
         }
+        // P2.10 — start/stop haptics: light tap when recording begins, success tap when it ends.
+        .sensoryFeedback(.impact(weight: .light), trigger: cap.isRecording) { old, new in !old && new }
+        .sensoryFeedback(.success, trigger: cap.isRecording) { old, new in old && !new }
     }
 }
 

@@ -389,6 +389,188 @@ if let w = MotionTrigger.swingWindow(leadWristSpeed: burst, fps: 30) {
 } else { check(false, "burst series ⇒ a window") }
 check(MotionTrigger.swingWindow(leadWristSpeed: [Double](repeating: 1.0, count: 40), fps: 30) == nil, "flat series ⇒ nil")
 
+// [P2.9] MotionTrigger.step — causal (no-lookahead) live recording trigger. Feeds a speed
+// series sample-by-sample through `step`, mirroring how CaptureController.detectMotion drives
+// it from a trailing recentSpeeds buffer, and checks the resulting LiveState.recording series.
+print("[MotionTrigger.step]")
+func runLiveTrigger(_ speeds: [Double], windowSize: Int = 12, minSamples: Int = 3) -> [MotionTrigger.LiveState] {
+    var buf: [Double] = []
+    var state = MotionTrigger.LiveState()
+    var states: [MotionTrigger.LiveState] = []
+    for speed in speeds {
+        buf.append(speed); if buf.count > windowSize { buf.removeFirst() }
+        if buf.count >= minSamples {
+            let mean = buf.reduce(0, +) / Double(buf.count)
+            state = MotionTrigger.step(state, speed: speed, recentMean: mean)
+        }
+        states.append(state)
+    }
+    return states
+}
+
+// Flat noisy baseline (small jitter, no burst) never fires across the whole series.
+let flatNoise = (0..<200).map { i in 0.18 + (i % 2 == 0 ? 0.02 : -0.02) }
+check(!runLiveTrigger(flatNoise).contains(where: { $0.recording }), "flat noisy baseline never triggers recording")
+
+// The existing synthetic burst array, fed sample-by-sample, with a settled tail appended so
+// the stop condition actually has room to fire (the bare 40-sample array only reaches
+// stillCount 15, one short of the >15 needed to stop within its own length).
+let burstWithTail = burst + [Double](repeating: 0.2, count: 10)
+let burstStates = runLiveTrigger(burstWithTail)
+if let startIdx = burstStates.firstIndex(where: { $0.recording }) {
+    check(startIdx == 18, "recording starts once the rise crosses recentMean * riseFactor (idx \(startIdx))")
+    if let stopIdx = burstStates[startIdx...].firstIndex(where: { !$0.recording }) {
+        check(stopIdx - startIdx >= 8, "recording never stops before minRecordingSamples elapse (\(stopIdx - startIdx) samples)")
+    } else {
+        check(false, "burst + settled tail ⇒ recording eventually stops")
+    }
+} else {
+    check(false, "burst series ⇒ recording starts")
+}
+
+// A brief low-speed dip inside the burst window (simulating the top-of-swing pause) must not
+// stop the recording — the concrete regression test for the minRecordingSamples risk.
+var midSwingPause = [Double](repeating: 0.2, count: 20)
+midSwingPause += [1.0, 2.5, 4.0, 5.0, 6.0]            // backswing rise to a peak
+midSwingPause += [0.1, 0.1, 0.1, 0.1, 0.1]             // brief top-of-backswing pause (5 samples)
+midSwingPause += [3.0, 5.0, 7.0, 8.0, 7.0, 5.0]         // downswing, higher peak
+midSwingPause += [Double](repeating: 0.2, count: 25)    // genuine settle tail
+let pauseStates = runLiveTrigger(midSwingPause)
+if let startIdx = pauseStates.firstIndex(where: { $0.recording }) {
+    let dipRange = 25...29
+    check(dipRange.allSatisfy { pauseStates[$0].recording }, "brief mid-swing pause does not false-stop the recording")
+    if let stopIdx = pauseStates[startIdx...].firstIndex(where: { !$0.recording }) {
+        check(stopIdx > dipRange.upperBound, "recording stops only after the real settle tail, not the pause")
+    } else {
+        check(false, "genuine settle tail ⇒ recording eventually stops")
+    }
+} else {
+    check(false, "swing-with-pause series ⇒ recording starts")
+}
+
+// Direct check of the minRecordingSamples guard's AND-logic, in isolation. With the shipped
+// defaults (minRecordingSamples: 8 < settleSamples: 15) samplesSinceStart >= stillCount always
+// holds by construction (stillCount only advances alongside samplesSinceStart, or resets), so
+// stillCount can never exceed settleSamples while samplesSinceStart is still under
+// minRecordingSamples — meaning no sample-by-sample series fed through `step` (like the two
+// checks above) can actually exercise the guard clause failing to withhold a stop. Construct a
+// LiveState directly instead, so the guard itself is proven correct independent of whether
+// today's constants make it reachable in practice.
+var earlyPause = MotionTrigger.LiveState()
+earlyPause.recording = true
+earlyPause.peakSpeed = 10.0
+earlyPause.stillCount = 20         // already past settleSamples (15)
+earlyPause.samplesSinceStart = 3   // still well under minRecordingSamples (8)
+let withheld = MotionTrigger.step(earlyPause, speed: 0.1, recentMean: 3.0)
+check(withheld.recording, "stop is withheld while samplesSinceStart < minRecordingSamples, even with stillCount already past settleSamples")
+
+var atFloor = earlyPause
+atFloor.samplesSinceStart = 6   // becomes 7 after this step's increment, one short of minRecordingSamples (8)
+let stillWithheld = MotionTrigger.step(atFloor, speed: 0.1, recentMean: 3.0)
+check(stillWithheld.recording, "stop is still withheld the sample before samplesSinceStart reaches minRecordingSamples")
+
+var atThreshold = earlyPause
+atThreshold.samplesSinceStart = 7   // becomes exactly minRecordingSamples (8) after this step's increment
+let fires = MotionTrigger.step(atThreshold, speed: 0.1, recentMean: 3.0)
+check(!fires.recording, "stop fires once samplesSinceStart reaches minRecordingSamples with stillCount already past settleSamples")
+
+// Two well-separated bursts back to back (idle → burst → settle → idle → burst → settle)
+// correctly produce recording=true twice, not a stuck state.
+func burstShape() -> [Double] {
+    var b = [Double](repeating: 0.2, count: 20)
+    b += [3.0, 4.0, 5.0, 6.0, 5.0, 4.0, 3.0]
+    b += [Double](repeating: 0.2, count: 25)
+    return b
+}
+let twoBurstStates = runLiveTrigger(burstShape() + burstShape())
+var startCount = 0
+var wasRecording = false
+for s in twoBurstStates {
+    if !wasRecording, s.recording { startCount += 1 }
+    wasRecording = s.recording
+}
+check(startCount == 2, "two consecutive bursts fire the trigger twice (\(startCount) starts)")
+check(!twoBurstStates.last!.recording, "settled back to idle after the second burst")
+
+// [P2.11] LivePhaseDetector — pure, causal swing-phase classification. Driven in lockstep with
+// MotionTrigger.step, exactly as CaptureController.detectMotion drives both from one shared
+// LiveState (see LivePhaseDetector.swift's step doc for the one deviation from the design
+// sketch: the impact test compares against the peak *before* updating it, not after).
+print("[LivePhaseDetector]")
+struct PhaseRun { let phases: [SwingPhase]; let recording: [Bool] }
+func runPhaseDetector(speeds: [Double], wristYs: [Double], windowSize: Int = 12, minSamples: Int = 6) -> PhaseRun {
+    var buf: [Double] = []
+    var triggerState = MotionTrigger.LiveState()
+    var phaseState = LivePhaseDetector.State()
+    var phases: [SwingPhase] = []
+    var recordingFlags: [Bool] = []
+    for (speed, wristY) in zip(speeds, wristYs) {
+        buf.append(speed); if buf.count > windowSize { buf.removeFirst() }
+        if buf.count >= minSamples {
+            let mean = buf.reduce(0, +) / Double(buf.count)
+            triggerState = MotionTrigger.step(triggerState, speed: speed, recentMean: mean)
+        }
+        phaseState = LivePhaseDetector.step(phaseState, speed: speed, wristY: wristY, trigger: triggerState)
+        phases.append(phaseState.phase)
+        recordingFlags.append(triggerState.recording)
+    }
+    return PhaseRun(phases: phases, recording: recordingFlags)
+}
+
+// A flat/no-motion series never leaves .address (recording never starts, so the detector's
+// idle guard keeps resetting it every sample).
+let flatPhaseRun = runPhaseDetector(speeds: [Double](repeating: 0.2, count: 60),
+                                     wristYs: [Double](repeating: 0.3, count: 60))
+check(flatPhaseRun.phases.allSatisfy { $0 == .address }, "flat series never leaves .address")
+
+// A clean synthetic swing: idle → slow backswing rise/fall → top pause → fast downswing burst →
+// deceleration → settle. wristY rises through the backswing (Vision convention: y increases
+// upward) and falls through the downswing, mirroring real swing kinematics closely enough to
+// exercise every transition.
+func syntheticSwingSpeeds() -> [Double] {
+    var s = [Double](repeating: 0.2, count: 20)     // idle
+    s += [0.4, 0.6, 0.8, 1.0, 1.0, 0.8, 0.6, 0.4]    // backswing
+    s += [0.2, 0.2, 0.2]                             // top-of-backswing pause
+    s += [1.0, 2.0, 4.0, 6.0, 8.0, 10.0]             // downswing acceleration into impact
+    s += [8.0, 5.0, 3.0, 1.0, 0.3]                   // post-impact deceleration
+    s += [Double](repeating: 0.2, count: 25)         // settle tail
+    return s
+}
+func syntheticSwingWristY() -> [Double] {
+    var y = [Double](repeating: 0.3, count: 20)              // idle, address height
+    y += [0.35, 0.4, 0.5, 0.6, 0.7, 0.75, 0.75, 0.75]         // rising through backswing
+    y += [0.75, 0.75, 0.74]                                   // top-of-backswing pause
+    y += [0.65, 0.55, 0.45, 0.35, 0.3, 0.28]                  // descending through downswing
+    y += [0.25, 0.22, 0.2, 0.2, 0.2]                          // finish, settled low
+    y += [Double](repeating: 0.2, count: 25)                  // settle tail
+    return y
+}
+let swingRun = runPhaseDetector(speeds: syntheticSwingSpeeds(), wristYs: syntheticSwingWristY())
+let expectedOrder: [SwingPhase] = [.address, .backswing, .transition, .downswing, .impact, .finish]
+var runs: [SwingPhase] = []
+for p in swingRun.phases where runs.last != p { runs.append(p) }
+check(runs.count >= expectedOrder.count, "clean burst visits every phase (\(runs))")
+check(Array(runs.prefix(expectedOrder.count)) == expectedOrder,
+      "clean burst visits phases in order with no backward jump (\(runs))")
+if runs.count > expectedOrder.count {
+    check(runs.count == expectedOrder.count + 1 && runs[expectedOrder.count] == .address,
+          "the only allowed backward jump is the final reset to .address once recording stops (\(runs))")
+}
+
+// Two consecutive bursts (idle → swing → idle → swing) each independently reach .backswing and
+// .finish, i.e. two full cycles rather than a stuck state.
+let doubleRun = runPhaseDetector(speeds: syntheticSwingSpeeds() + syntheticSwingSpeeds(),
+                                  wristYs: syntheticSwingWristY() + syntheticSwingWristY())
+var backswingEntries = 0, finishEntries = 0
+var prevPhase = SwingPhase.address
+for p in doubleRun.phases {
+    if p == .backswing, prevPhase != .backswing { backswingEntries += 1 }
+    if p == .finish, prevPhase != .finish { finishEntries += 1 }
+    prevPhase = p
+}
+check(backswingEntries == 2, "two consecutive bursts start two independent backswing phases (\(backswingEntries))")
+check(finishEntries == 2, "two consecutive bursts each independently reach .finish (\(finishEntries))")
+
 // [P2.2] EventAlignment — pure.
 print("[EventAlignment]")
 let ea = SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 1.0, frame: 30),
@@ -554,6 +736,60 @@ check(zip(cpath.points, cpath.points.dropFirst()).allSatisfy { $0.0.t <= $0.1.t 
 check(cpath.points.allSatisfy { $0.pos.x.isFinite && $0.pos.y.isFinite }, "C5 club path finite")
 check(cpath.coverage > 0 && cpath.coverage <= 1, "C5 coverage in (0,1] (\(cpath.coverage))")
 check(ClubTracker.path(detections: []).points.isEmpty, "C5 empty detections ⇒ empty")
+
+// [P3.5] ContactEvaluator — pure combinator, default-to-true bias on every ambiguous branch.
+print("[ContactEvaluator]")
+let noBall = ContactEvaluator.evaluate(ballAtAddress: nil, flightDetected: false, ballStillAtAddressSpot: false)
+check(noBall.likelyContact && noBall.reason == "no ball detected — not evaluated", "no ball found ⇒ true/not evaluated")
+
+let flightSeen = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: true, ballStillAtAddressSpot: false)
+check(flightSeen.likelyContact && flightSeen.reason == "ball flight traced", "ball + flight ⇒ true/ball flight traced")
+
+let stillThere = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: false, ballStillAtAddressSpot: true)
+check(!stillThere.likelyContact && stillThere.reason == "no contact detected", "ball + still present ⇒ false/no contact detected")
+
+let ambiguous = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: false, ballStillAtAddressSpot: false)
+check(ambiguous.likelyContact && ambiguous.reason == "ambiguous — assumed contact", "ball + neither ⇒ true/ambiguous assumed contact")
+
+// [P3.6] ContactEvaluator + audioTransientAtImpact — OR combination. The four checks above
+// all omit the new parameter (defaults to false), so they already cover "audio doesn't fire ⇒
+// vision-only behavior unchanged"; these cover the OR itself.
+let audioFlipsNoContact = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: false,
+                                                    ballStillAtAddressSpot: true, audioTransientAtImpact: true)
+check(audioFlipsNoContact.likelyContact && audioFlipsNoContact.reason == "audio transient at impact",
+      "audio fires over 'still present' ⇒ true/audio transient at impact")
+
+let audioAndFlight = ContactEvaluator.evaluate(ballAtAddress: CGPoint(x: 0.5, y: 0.5), flightDetected: true,
+                                               ballStillAtAddressSpot: false, audioTransientAtImpact: true)
+check(audioAndFlight.likelyContact && audioAndFlight.reason == "ball flight traced & audio transient at impact",
+      "flight + audio both fire ⇒ true/combined reason")
+
+// [P3.6] AudioImpactDetector.strongestPeak — pure envelope peak-picking, mirrors
+// MotionTrigger's riseFactor burst test applied to audio energy instead of wrist speed.
+print("[AudioImpactDetector]")
+
+let silence: [(t: Double, energy: Double)] = stride(from: 0.0, to: 1.0, by: 0.005).map { (t: $0, energy: 0.0) }
+check(AudioImpactDetector.strongestPeak(envelope: silence, window: 0.0...1.0) == nil, "silence-only ⇒ nil, never reports a peak")
+
+var impulseEnvelope: [(t: Double, energy: Double)] = stride(from: 0.0, to: 1.0, by: 0.005).map { (t: $0, energy: 0.01) }
+let impulseTime = 0.5
+if let idx = impulseEnvelope.firstIndex(where: { abs($0.t - impulseTime) < 0.0026 }) {
+    impulseEnvelope[idx].energy = 0.9
+}
+if let peak = AudioImpactDetector.strongestPeak(envelope: impulseEnvelope, window: 0.0...1.0) {
+    check(abs(peak - impulseTime) <= 0.005, "sharp impulse ⇒ peak within one sample-window of injected time (\(peak) ≈ \(impulseTime))")
+} else {
+    check(false, "sharp impulse ⇒ peak within one sample-window of injected time (got nil)")
+}
+
+let ambientNoise: [(t: Double, energy: Double)] = stride(from: 0.0, to: 1.0, by: 0.005).map { (t: $0, energy: 0.12) }
+check(AudioImpactDetector.strongestPeak(envelope: ambientNoise, window: 0.0...1.0) == nil,
+      "evenly-loud ambient noise ⇒ nil, doesn't false-trigger")
+
+var outsideWindowImpulse: [(t: Double, energy: Double)] = stride(from: 0.0, to: 1.0, by: 0.005).map { (t: $0, energy: 0.01) }
+if let idx = outsideWindowImpulse.firstIndex(where: { abs($0.t - 0.9) < 0.0026 }) { outsideWindowImpulse[idx].energy = 0.9 }
+check(AudioImpactDetector.strongestPeak(envelope: outsideWindowImpulse, window: 0.0...0.5) == nil,
+      "impulse outside window ⇒ nil, only in-window candidates considered")
 
 do {
     let plane = PlaneAnalysis(plane: SwingLine(a: CGPoint(x: 0, y: 0.2), b: CGPoint(x: 1, y: 0.8)),

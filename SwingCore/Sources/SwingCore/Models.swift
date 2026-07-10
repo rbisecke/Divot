@@ -123,12 +123,13 @@ public struct SwingAnalysis: Codable, Sendable, Identifiable {
     public var ball: CGPoint?
     public var clubHeadPath: ClubHeadPath?
     public var ballFlight: BallFlight?
+    public var contact: ContactSignal?   // P3.5, alongside the existing C1–C5 optional fields
     public init(index: Int, events: SwingEvents, metrics: SwingMetrics, faults: [Fault],
                 comparison: Comparison? = nil, plane: PlaneAnalysis? = nil, ball: CGPoint? = nil,
-                clubHeadPath: ClubHeadPath? = nil, ballFlight: BallFlight? = nil) {
+                clubHeadPath: ClubHeadPath? = nil, ballFlight: BallFlight? = nil, contact: ContactSignal? = nil) {
         self.index = index; self.events = events; self.metrics = metrics; self.faults = faults
         self.comparison = comparison; self.plane = plane; self.ball = ball
-        self.clubHeadPath = clubHeadPath; self.ballFlight = ballFlight
+        self.clubHeadPath = clubHeadPath; self.ballFlight = ballFlight; self.contact = contact
     }
 }
 

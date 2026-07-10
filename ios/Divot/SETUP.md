@@ -29,9 +29,12 @@ the 8 pro reference templates), and includes the `GolfSwingAnalyzerTests` suite.
 manage signing* → pick your personal Team. (Bundle id defaults to `com.golfswing.app`.)
 
 ## Info.plist
-No special permissions are required: `PhotosPicker` and the Files importer both work
-without a usage-description string. (If you later switch to the classic photo-library
-API, add `NSPhotoLibraryUsageDescription`.)
+Analyzing an existing clip needs no special permission: `PhotosPicker` and the Files
+importer both work without a usage-description string. (If you later switch to the classic
+photo-library API, add `NSPhotoLibraryUsageDescription`.) The in-app recorder is different:
+it prompts for `NSCameraUsageDescription` on first use, and now also
+`NSMicrophoneUsageDescription` so the recorded clip carries an audio track (used only for
+an on-device swing-contact signal; audio never leaves the phone).
 
 ## Build & run to your iPhone
 - Plug in the phone, select it as the run destination, press **▶**.

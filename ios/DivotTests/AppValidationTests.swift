@@ -118,6 +118,63 @@ final class AppValidationTests: XCTestCase {
         XCTAssertGreaterThan(cmp.overall, 0)
     }
 
+    /// P2.11 — the centerpiece validation for the live phase state machine: replay the same
+    /// bundled real-swing fixture the golden pipeline test above already trusts, frame-by-frame,
+    /// through both `MotionTrigger.step` and `LivePhaseDetector.step` in lockstep (exactly how
+    /// `CaptureController.detectMotion` drives them from one shared `LiveState`), and cross-check
+    /// the causally-detected `.impact` sample against `EventDetector.detect(...)`'s non-causal,
+    /// already golden-tested `impact.frame`. This is the actual acceptance bar for P2.11 — if the
+    /// causal detector can't land near the real impact frame on real pose data, the transition
+    /// thresholds in `LivePhaseDetector.step` aren't ready, synthetic-only checks notwithstanding.
+    func testLivePhaseDetectorMatchesEventDetectorOnRealPose() throws {
+        let bundle = Bundle(for: type(of: self))
+        let jsonURL = try XCTUnwrap(bundle.url(forResource: "sample_swing.pose", withExtension: "json"))
+        let replay = try ReplayPoseProvider(contentsOf: jsonURL)
+        let pose = try replay.pose(for: URL(fileURLWithPath: "/dev/null"), fps: 30)
+        let knownGoodImpact = EventDetector.detect(pose).impact.frame
+
+        var triggerState = MotionTrigger.LiveState()
+        var phaseState = LivePhaseDetector.State()
+        var recentSpeeds: [Double] = []
+        var lastWrist: JointPoint?
+        var impactFrame: Int?
+        for (i, frame) in pose.frames.enumerated() {
+            // Same calc as EventDetector: frame-to-frame lead-wrist (left wrist, default hand
+            // .right) displacement in pixel units.
+            let wrist = frame.joints[.leftWrist] ?? lastWrist
+            let speed: Double
+            if let w = wrist, let last = lastWrist {
+                let dx = (w.x - last.x) * Double(pose.width), dy = (w.y - last.y) * Double(pose.height)
+                speed = (dx * dx + dy * dy).squareRoot()
+            } else {
+                speed = 0
+            }
+            if let w = wrist { lastWrist = w }
+
+            recentSpeeds.append(speed); if recentSpeeds.count > 12 { recentSpeeds.removeFirst() }
+            let recentMean = recentSpeeds.reduce(0, +) / Double(recentSpeeds.count)
+
+            triggerState = MotionTrigger.step(triggerState, speed: speed, recentMean: recentMean)
+            phaseState = LivePhaseDetector.step(phaseState, speed: speed, wristY: wrist?.y ?? 0, trigger: triggerState)
+            if phaseState.phase == .impact, impactFrame == nil { impactFrame = i }
+        }
+        let detected = try XCTUnwrap(impactFrame, "live detector should reach .impact on a real swing")
+        XCTAssertEqual(Double(detected), Double(knownGoodImpact), accuracy: 5,
+                        "live causal impact (\(detected)) should land within ~5 frames of the golden non-causal detector (\(knownGoodImpact))")
+    }
+
+    /// P2.8 — a continuous take with two swings must not be discarded down to one. Replays a
+    /// synthetic two-swing pose fixture through the exact `analyzeSession` path a multi-swing
+    /// Photos import already exercises, and asserts both swings survive segmentation.
+    func testAnalyzeSessionSegmentsMultipleSwings() throws {
+        let bundle = Bundle(for: type(of: self))
+        let jsonURL = try XCTUnwrap(bundle.url(forResource: "sample_multiswing.pose", withExtension: "json"))
+        let replay = try ReplayPoseProvider(contentsOf: jsonURL)
+        let session = try SwingAnalyzer.analyzeSession(video: URL(fileURLWithPath: "/dev/null"),
+                                                        club: i7, angle: .faceOn, hand: .right, provider: replay)
+        XCTAssertGreaterThanOrEqual(session.swings.count, 2, "both swings survive segmentation")
+    }
+
     func testBenchmarksClubAware() {
         let wedge = FaultEvaluator.benchmarks(category: .wedge)
         let driver = FaultEvaluator.benchmarks(category: .driver)
