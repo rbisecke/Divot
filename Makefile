@@ -15,7 +15,7 @@ generate:             ## regenerate the Xcode project from ios/project.yml
 
 validate:             ## T1 engine golden checks (headless, no Xcode needed)
 	bash SwingCore/validate.sh
-	@grep -q "ALL PASS" /tmp/sc.log && echo "engine: ALL PASS" || (echo "engine: FAILED" && exit 1)
+	@grep -qE "ALL PASS, [0-9]+ checks" /tmp/sc.log && grep -E "ALL PASS, [0-9]+ checks" /tmp/sc.log | tail -1 | sed 's/^/engine: /' || (echo "engine: FAILED" && exit 1)
 
 test: generate        ## T2 simulator: unit + a11y audit + screenshot tour
 	set -o pipefail; NSUnbufferedIO=YES xcodebuild test \

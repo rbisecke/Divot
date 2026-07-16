@@ -6,12 +6,21 @@ import SwingCore
 // Add checks per stage; exits non-zero on any failure so it gates commits.
 
 var failures = 0
+var total = 0
+var skippedSections: [String] = []
 func check(_ cond: Bool, _ msg: String) {
+    total += 1
     if cond { print("  ✓ \(msg)") } else { print("  ✗ FAIL: \(msg)"); failures += 1 }
 }
 func approx(_ a: Double?, _ b: Double, _ tol: Double, _ msg: String) {
-    guard let a = a else { print("  ✗ FAIL: \(msg) (nil)"); failures += 1; return }
+    guard let a = a else { check(false, "\(msg) (nil)"); return }
     check(abs(a - b) <= tol, "\(msg) (\(a) ≈ \(b) ±\(tol))")
+}
+// Records a whole section as skipped (fixture absent) so the end-of-run summary shows what
+// didn't run, instead of that only being discoverable by scrolling the full log.
+func skip(_ section: String, _ reason: String) {
+    skippedSections.append(section)
+    print("  ⊘ \(reason)")
 }
 
 // One-off recorder: SWINGCORE_RECORD_POSE=<out.json> SWINGCORE_RECORD_SRC=<clip.mov>
@@ -52,7 +61,7 @@ do {
     let data = try JSONEncoder().encode(pwSpec)
     let back = try JSONDecoder().decode(ClubSpec.self, from: data)
     check(back == pwSpec, "ClubSpec Codable round-trip (id/category/loft/label)")
-} catch { print("  ✗ FAIL: ClubSpec Codable threw \(error)"); failures += 1 }
+} catch { print("  ✗ FAIL: ClubSpec Codable threw \(error)"); failures += 1; total += 1 }
 // Legacy tolerance: a pre-ClubSpec Session stored its club as a bare string ("7i","pw").
 // Decoding that JSON must map through ClubLegacy so old persisted sessions still open.
 do {
@@ -64,7 +73,7 @@ do {
     let legacySessionJSON = "{\"id\":\"00000000-0000-0000-0000-000000000000\",\"date\":0,\"club\":\"3w\",\"angle\":\"face_on\",\"hand\":\"R\",\"swings\":[]}"
     let s = try JSONDecoder().decode(Session.self, from: Data(legacySessionJSON.utf8))
     check(s.club.category == .wood && s.club.number == 3, "legacy Session blob with string club decodes (3w → wood 3)")
-} catch { print("  ✗ FAIL: legacy club decode threw \(error)"); failures += 1 }
+} catch { print("  ✗ FAIL: legacy club decode threw \(error)"); failures += 1; total += 1 }
 // sortKey orders Driver → woods → hybrid → irons → wedges(46→58)
 let sortedNames = Bag.sorted(Bag.defaultBag).map { $0.displayName }
 check(sortedNames == ["Driver","3W","5H","6i","7i","8i","9i","PW","50°","54°","58°"],
@@ -133,14 +142,16 @@ do {
     let data = try JSONEncoder().encode(mm)
     let back = try JSONDecoder().decode(SwingMetrics.self, from: data)
     check(back.headRiseCm == -6.4 && back.leadArmBendDeg == 24.6, "SwingMetrics Codable round-trip")
-} catch { print("  ✗ FAIL: Codable threw \(error)"); failures += 1 }
+} catch { print("  ✗ FAIL: Codable threw \(error)"); failures += 1; total += 1 }
 
 // [S1] Pose — integration check against a real clip (CLI oracle: 126 frames, all detected).
 // Skips gracefully if the clip isn't present (keeps the harness portable).
 print("[Pose]")
+// No repo-committed fallback: a real swing clip can't be committed (privacy hard rule), so this
+// section only runs when a developer points SWINGCORE_TEST_CLIP at one locally. CI/clean clones
+// skip it by design — see claude_docs/code-review-findings.md #1.
 let clipPath = ProcessInfo.processInfo.environment["SWINGCORE_TEST_CLIP"]
-    ?? "/Users/rbisecke/Downloads/golf_vids/auto/swing_1.mov"
-if FileManager.default.fileExists(atPath: clipPath) {
+if let clipPath, FileManager.default.fileExists(atPath: clipPath) {
     do {
         let seq = try PoseEstimator.pose(video: URL(fileURLWithPath: clipPath), fps: 30)
         check(seq.frames.count >= 120 && seq.frames.count <= 132, "pose sampled ~126 frames (got \(seq.frames.count))")
@@ -283,17 +294,17 @@ if FileManager.default.fileExists(atPath: clipPath) {
         check(ed.angle == .faceOn && ed.confidence == 0, "empty pose → default face-on, confidence 0")
 
         // [P1.6] AngleDetector — down-the-line fixture ground truth (the other class).
+        // No repo fallback (real clip, un-committable) — set SWINGCORE_TEST_DTL_CLIP locally to run this.
         let dtlPath = ProcessInfo.processInfo.environment["SWINGCORE_TEST_DTL_CLIP"]
-            ?? "/Users/rbisecke/workspace/golfing/swing-analyzer/ios/GolfSwingAnalyzerTests/Fixtures/sample_swing_dtl.mov"
-        if FileManager.default.fileExists(atPath: dtlPath) {
+        if let dtlPath, FileManager.default.fileExists(atPath: dtlPath) {
             do {
                 let dseq = try PoseEstimator.pose(video: URL(fileURLWithPath: dtlPath), fps: 30)
                 let ddet = AngleDetector.detect(dseq, events: EventDetector.detect(dseq))
                 check(ddet.angle == .dtl,
                       "classifies DTL fixture as down-the-line (got \(ddet.angle.rawValue), conf \(String(format:"%.2f", ddet.confidence)))")
-            } catch { print("  ✗ FAIL: DTL pose threw \(error)"); failures += 1 }
+            } catch { print("  ✗ FAIL: DTL pose threw \(error)"); failures += 1; total += 1 }
         } else {
-            print("  ⊘ DTL fixture absent (skipped)")
+            skip("AngleDetector.dtl", "DTL fixture absent (set SWINGCORE_TEST_DTL_CLIP to enable)")
         }
 
         // [P2.4] SequenceEngine + [P2.3] headTravelCm + [P2.1] auto-trim (clip-dependent).
@@ -309,9 +320,10 @@ if FileManager.default.fileExists(atPath: clipPath) {
         if let win = Segmenter.swings(in: seq, max: 1).first {
             check(ev.impact.t >= win.start && ev.impact.t <= win.end, "auto-trim window contains impact")
         } else { check(false, "segmenter returns a window") }
-    } catch { print("  ✗ FAIL: pose threw \(error)"); failures += 1 }
+    } catch { print("  ✗ FAIL: pose threw \(error)"); failures += 1; total += 1 }
 } else {
-    print("  ⊘ skipped (no test clip at \(clipPath))")
+    skip("Pose+Segment+Events+Metrics+Faults+Reference+Template+Comparator+Pipeline+Benchmarks+SwingLines+AngleDetector+P2clip",
+         "no test clip (set SWINGCORE_TEST_CLIP to enable)")
 }
 
 // [P1.5] Trends — pure aggregation over synthetic sessions (no clip needed).
@@ -433,10 +445,11 @@ let reversed = SequenceEngine.compute(seqPose(pelvis: 8, torso: 6, arm: 4, hand:
 check(!reversed.inSequence, "reversed order ⇒ inSequence false")
 
 // [P3.1] MLM2PRO CSV parser — golden check against a committed fixture.
+// validate.sh exports SWINGCORE_TEST_CSV at the repo's own ios/DivotTests/Fixtures/sample_shots.csv
+// by default, so this runs in CI/on a clean clone with no manual setup.
 print("[MLM2ProCSV]")
 let csvPath = ProcessInfo.processInfo.environment["SWINGCORE_TEST_CSV"]
-    ?? "/Users/rbisecke/workspace/golfing/swing-analyzer/ios/GolfSwingAnalyzerTests/Fixtures/sample_shots.csv"
-if let csvText = try? String(contentsOfFile: csvPath, encoding: .utf8) {
+if let csvPath, let csvText = try? String(contentsOfFile: csvPath, encoding: .utf8) {
     let rows = MLM2ProCSV.parse(csvText)
     check(rows.count == 5, "parses 5 shot rows (got \(rows.count))")
     if rows.count >= 2 {
@@ -453,14 +466,14 @@ if let csvText = try? String(contentsOfFile: csvPath, encoding: .utf8) {
     // header-only input → no rows
     check(MLM2ProCSV.parse(csvText.split(separator: "\n").first.map(String.init) ?? "").isEmpty, "header-only ⇒ no rows")
 } else {
-    print("  ⊘ skipped (no CSV fixture at \(csvPath))")
+    skip("MLM2ProCSV", "no CSV fixture (set SWINGCORE_TEST_CSV to enable; validate.sh sets a repo default)")
 }
 
 // [Mock] ReplayPoseProvider — the whole pipeline runs from a recorded pose (Simulator/CI path).
+// validate.sh exports SWINGCORE_TEST_POSE_JSON at the repo's own sample_swing.pose.json by default.
 print("[Replay]")
 let poseJSON = ProcessInfo.processInfo.environment["SWINGCORE_TEST_POSE_JSON"]
-    ?? "/Users/rbisecke/workspace/golfing/swing-analyzer/ios/GolfSwingAnalyzerTests/Fixtures/sample_swing.pose.json"
-if FileManager.default.fileExists(atPath: poseJSON) {
+if let poseJSON, FileManager.default.fileExists(atPath: poseJSON) {
     do {
         let replay = try ReplayPoseProvider(contentsOf: URL(fileURLWithPath: poseJSON))
         check(replay.sequence.frames.count > 100, "replay pose has frames (\(replay.sequence.frames.count))")
@@ -476,15 +489,16 @@ if FileManager.default.fileExists(atPath: poseJSON) {
         check(rcodes.contains("chicken_wing") || rcodes.contains("hanging_back"), "replay yields known faults \(rcodes)")
         check(sw.comparison != nil && (sw.comparison?.overall ?? 0) > 0, "replay yields pro comparison")
         // Faithfulness: on macOS Vision runs, so live pose of the same fixture must match the recording.
-        let fixture = "/Users/rbisecke/workspace/golfing/swing-analyzer/ios/GolfSwingAnalyzerTests/Fixtures/sample_swing.mov"
-        if FileManager.default.fileExists(atPath: fixture) {
-            let live = try PoseEstimator.pose(video: URL(fileURLWithPath: fixture), fps: 30)
+        // Reuses SWINGCORE_TEST_CLIP (the [Pose] section's clip) rather than a second hardcoded
+        // path — sample_swing.pose.json was recorded from that same real clip.
+        if let clipPath, FileManager.default.fileExists(atPath: clipPath) {
+            let live = try PoseEstimator.pose(video: URL(fileURLWithPath: clipPath), fps: 30)
             check(EventDetector.detect(live).impact.frame == EventDetector.detect(replay.sequence).impact.frame,
                   "replay matches live Vision impact frame (faithful capture)")
         }
-    } catch { print("  ✗ FAIL: replay threw \(error)"); failures += 1 }
+    } catch { print("  ✗ FAIL: replay threw \(error)"); failures += 1; total += 1 }
 } else {
-    print("  ⊘ replay pose JSON absent (skipped)")
+    skip("Replay", "replay pose JSON absent (set SWINGCORE_TEST_POSE_JSON; validate.sh sets a repo default)")
 }
 
 // [ClubPath] C1-C5 — target/plane geometry, ball detect, over-the-top, ball-flight link, club tracker.
@@ -534,7 +548,7 @@ let over = PlaneEngine.analyze(cpPose(0.2), events: cpEvents, hand: .right, ball
 check(over.overTheTop, "C3 over-the-top synthetic ⇒ true (maxAbove \(over.maxAbovePlane))")
 let shallow = PlaneEngine.analyze(cpPose(0.6), events: cpEvents, hand: .right, ball: cpBall)
 check(!shallow.overTheTop, "C3 shallow synthetic ⇒ false (maxAbove \(shallow.maxAbovePlane))")
-if FileManager.default.fileExists(atPath: poseJSON), let rp = try? ReplayPoseProvider(contentsOf: URL(fileURLWithPath: poseJSON)) {
+if let poseJSON, FileManager.default.fileExists(atPath: poseJSON), let rp = try? ReplayPoseProvider(contentsOf: URL(fileURLWithPath: poseJSON)) {
     let pa = PlaneEngine.analyze(rp.sequence, events: EventDetector.detect(rp.sequence), angle: .faceOn, hand: .right, ball: nil)
     check(pa.maxAbovePlane.isFinite && pa.source == "hand", "C3 replay plane finite, source hand")
 }
@@ -568,5 +582,8 @@ do {
           "C-model ball/club/flight round-trip")
 } catch { check(false, "C-model SwingAnalysis round-trip threw \(error)") }
 
-print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
+if !skippedSections.isEmpty {
+    print("-- skipped sections (fixture-gated, absent this run): \(skippedSections.joined(separator: ", ")) --")
+}
+print(failures == 0 ? "ALL PASS, \(total) checks" : "\(failures) FAILURE(S) of \(total) checks")
 exit(failures == 0 ? 0 : 1)
