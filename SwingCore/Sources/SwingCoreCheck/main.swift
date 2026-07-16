@@ -386,6 +386,42 @@ do {
     check(false, "nonexistent video threw the wrong error: \(error)")
 }
 
+// [Segmenter synthetic] — Segmenter.swings(in:) with a synthetic multi-swing clip, no real clip
+// needed. Builds a lead-wrist speed series with sharp bursts at chosen times (flat baseline, then
+// a brief fast excursion and back) and confirms swings collapse/separate the way minSep intends.
+print("[Segmenter synthetic]")
+func burstPose(burstTimes: [Double], duration: Double, fps: Double = 30) -> PoseSequence {
+    let n = Int(duration * fps)
+    var frames: [PoseFrame] = []
+    for i in 0..<n {
+        let t = Double(i) / fps
+        // Default resting position; near any burst time, sweep x rapidly across a wide span.
+        var x = 0.3
+        for bt in burstTimes {
+            let dt = t - bt
+            if abs(dt) < 0.2 { x = 0.3 + 0.4 * (dt / 0.2) }   // fast sweep across +/-0.2s window
+        }
+        frames.append(PoseFrame(t: t, joints: [
+            .leftWrist: JointPoint(x: x, y: 0.5, c: 1),
+            .leftShoulder: JointPoint(x: 0.42, y: 0.7, c: 1), .rightShoulder: JointPoint(x: 0.58, y: 0.7, c: 1),
+            .leftHip: JointPoint(x: 0.45, y: 0.5, c: 1), .rightHip: JointPoint(x: 0.55, y: 0.5, c: 1),
+        ]))
+    }
+    return PoseSequence(fps: fps, width: 1000, height: 1000, frames: frames)
+}
+// Two bursts 4s apart (well outside the default 3.0s minSep) ⇒ 2 separate windows, in time order.
+let farApart = burstPose(burstTimes: [3.0, 7.0], duration: 12)
+let farWindows = Segmenter.swings(in: farApart, max: 5)
+check(farWindows.count == 2, "two bursts 4s apart ⇒ 2 windows (got \(farWindows.count))")
+if farWindows.count == 2 {
+    check(farWindows[0].impact < farWindows[1].impact, "windows are in time order")
+    check(abs(farWindows[0].impact - 3.0) < 0.5 && abs(farWindows[1].impact - 7.0) < 0.5, "impacts land near the two burst times")
+}
+// Two bursts 1s apart (inside the default 3.0s minSep) ⇒ collapse to 1 window.
+let closeTogether = burstPose(burstTimes: [5.0, 6.0], duration: 12)
+let closeWindows = Segmenter.swings(in: closeTogether, max: 5)
+check(closeWindows.count == 1, "two bursts 1s apart (< minSep) ⇒ collapse to 1 window (got \(closeWindows.count))")
+
 // Faults.swift threshold/severity math — previously only exercised incidentally via one golden
 // fixture (Medium finding). Driven from FaultEvaluator.benchmarks(category:) itself (the public
 // mirror of the internal Benchmarks.defaults/MetricDef this module can't reach directly) rather
@@ -663,6 +699,24 @@ if let csvPath, let csvText = try? String(contentsOfFile: csvPath, encoding: .ut
     check(robust.count >= 5, "malformed/short lines skipped, not crashed (got \(robust.count))")
     // header-only input → no rows
     check(MLM2ProCSV.parse(csvText.split(separator: "\n").first.map(String.init) ?? "").isEmpty, "header-only ⇒ no rows")
+
+    // Test-coverage gap, PINNING a known bug rather than asserting "correct" behavior (Low-priority
+    // real fix pending, tracked separately — once quote-aware line-splitting lands, flip this to
+    // the corrected 2-row expectation): parse() splits on raw newlines *before* quote-aware field
+    // parsing, so a quoted field with an embedded newline gets mis-split into 3 rows (the correct
+    // 2 logical rows would be here) instead of reading the newline as part of one field. Values
+    // below are the actual empirically-observed parse output for this fixture, not a guess.
+    let embeddedNewlineCSV = "\"Club Type\",\"Club Brand\",\"Club Model\",\"Carry Distance\"\n" +
+        "\"9i\",\"Titleist\",\"Pro\nModel\",\"8.0\"\n" +
+        "\"7i\",\"Callaway\",\"X\",\"32.2\"\n"
+    let embeddedRows = MLM2ProCSV.parse(embeddedNewlineCSV)
+    check(embeddedRows.count == 3, "KNOWN BUG pinned: embedded newline in a quoted field mis-splits into 3 rows, not the correct 2 (got \(embeddedRows.count))")
+    if embeddedRows.count == 3 {
+        check(embeddedRows[0].clubType == "9i" && embeddedRows[0].clubModel == "Pro" && embeddedRows[0].carryDistance == nil,
+              "row 1 truncated at the embedded newline, losing carryDistance")
+        check(embeddedRows[1].clubType == "Model,8.0", "row 2 is the bogus tail fragment (\(embeddedRows[1].clubType))")
+        check(embeddedRows[2].clubType == "7i" && embeddedRows[2].carryDistance == 32.2, "row 3 is the next real row, unaffected")
+    }
 } else {
     skip("MLM2ProCSV", "no CSV fixture (set SWINGCORE_TEST_CSV to enable; validate.sh sets a repo default)")
 }
@@ -791,6 +845,11 @@ if let poseJSON, FileManager.default.fileExists(atPath: poseJSON), let rp = try?
     let pa = PlaneEngine.analyze(rp.sequence, events: EventDetector.detect(rp.sequence), angle: .faceOn, hand: .right, ball: nil)
     check(pa.maxAbovePlane.isFinite && pa.source == "hand", "C3 replay plane finite, source hand")
 }
+// Test-coverage gap: an explicitly empty (non-nil) clubPath must not silently fall back to the
+// hand-path source — it's a genuine "no club-head data this swing" signal, not "unset."
+let emptyClubPath = PlaneEngine.analyze(cpPose(0.2), events: cpEvents, hand: .right, ball: cpBall, clubPath: [])
+check(!emptyClubPath.overTheTop && emptyClubPath.maxAbovePlane == 0 && emptyClubPath.source == "club",
+      "C3 empty clubPath ⇒ overTheTop false, maxAbovePlane 0, source stays \"club\" (\(emptyClubPath.source))")
 
 var bobs: [(CGPoint, Double)] = []
 for i in 0..<10 { let x = Double(i) / 10; bobs.append((CGPoint(x: x, y: 0.9 - x * x), 1)) }
@@ -798,6 +857,19 @@ let linked = BallFlightTracer.link(bobs)
 check(linked.count == 10, "C4 ball-flight link keeps finite points (\(linked.count))")
 check(zip(linked, linked.dropFirst()).allSatisfy { Double($0.0.x) <= Double($0.1.x) + 1e-9 }, "C4 ball-flight x non-decreasing")
 check(BallFlightTracer.link([]).isEmpty, "C4 empty ⇒ empty")
+// Test-coverage gap: a single-point observation is returned unchanged (the guard requires >= 2
+// points before it attempts any sorting/smoothing).
+let singlePoint = [(CGPoint(x: 0.4, y: 0.6), 0.9)]
+check(BallFlightTracer.link(singlePoint).count == 1 && BallFlightTracer.link(singlePoint)[0] == singlePoint[0].0,
+      "C4 single-point observation returned unchanged")
+// Test-coverage gap, documenting a KNOWN GAP rather than asserting "correct" behavior (Low-priority
+// real fix pending — link always sorts ascending-x regardless of true flight direction, so a
+// right-to-left shot, e.g. a mirrored/lefty setup, gets reordered backwards in time).
+var reverseBobs: [(CGPoint, Double)] = []
+for i in 0..<10 { let x = 1 - Double(i) / 10; reverseBobs.append((CGPoint(x: x, y: 0.9 - x * x), 1)) }   // right-to-left in time
+let reverseLinked = BallFlightTracer.link(reverseBobs)
+check(zip(reverseLinked, reverseLinked.dropFirst()).allSatisfy { Double($0.0.x) <= Double($0.1.x) + 1e-9 },
+      "C4 KNOWN GAP pinned: a right-to-left (reverse) flight still comes out x-ascending, i.e. reordered backwards in time")
 
 var dets: [(t: Double, pt: CGPoint?, conf: Double)] = []
 for i in 0..<10 { let ok = i % 3 != 0; dets.append((Double(i) / 30, ok ? CGPoint(x: Double(i) / 10, y: 0.5) : nil, ok ? 0.9 : 0)) }
@@ -807,6 +879,26 @@ check(zip(cpath.points, cpath.points.dropFirst()).allSatisfy { $0.0.t <= $0.1.t 
 check(cpath.points.allSatisfy { $0.pos.x.isFinite && $0.pos.y.isFinite }, "C5 club path finite")
 check(cpath.coverage > 0 && cpath.coverage <= 1, "C5 coverage in (0,1] (\(cpath.coverage))")
 check(ClubTracker.path(detections: []).points.isEmpty, "C5 empty detections ⇒ empty")
+// Test-coverage gap: 100%-gap (all-nil) detections must yield empty points and zero coverage,
+// not garbage from interpolating between two nonexistent anchors.
+let allNilDets: [(t: Double, pt: CGPoint?, conf: Double)] = (0..<10).map { (Double($0) / 30, nil, 0) }
+let allNilPath = ClubTracker.path(detections: allNilDets)
+check(allNilPath.points.isEmpty && allNilPath.coverage == 0, "C5 100%-gap (all-nil) detections ⇒ empty points, coverage 0")
+
+// Test-coverage gap: two well-separated, non-overlapping bright blobs must fail the circularity
+// gate (the combined bounding box spans both circles, so width/height ratio and fill drop) and
+// return nil, not garbage from averaging both centroids together.
+func twoCircleImage(_ c1: (Double, Double), _ c2: (Double, Double), _ r: Double, _ size: Int = 100) -> CGImage? {
+    guard let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
+                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
+    ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    for c in [c1, c2] { ctx.fillEllipse(in: CGRect(x: c.0 * Double(size) - r, y: c.1 * Double(size) - r, width: 2 * r, height: 2 * r)) }
+    return ctx.makeImage()
+}
+if let twoImg = twoCircleImage((0.15, 0.5), (0.85, 0.5), 6) {
+    check(BallDetector.detectAtAddress(image: twoImg) == nil, "C2 two separated blobs ⇒ nil (fails circularity, not averaged into a false centroid)")
+}
 
 do {
     let plane = PlaneAnalysis(plane: SwingLine(a: CGPoint(x: 0, y: 0.2), b: CGPoint(x: 1, y: 0.8)),
