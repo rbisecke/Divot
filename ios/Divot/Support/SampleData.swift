@@ -15,8 +15,10 @@ enum SampleData {
             for s in existing { try? FileManager.default.removeItem(at: s.videoURL); context.delete(s) }
         }
 
-        // Seed the default bag first so the sample sessions bind to real bag clubs.
-        BagStore.seedDefaultBagIfEmpty(context)
+        // Seed the default bag first so the sample sessions bind to real bag clubs. DEBUG-only
+        // screenshot seeding, not a production data path, so a failure here is a `try?` (nothing
+        // duplicative or user-visible depends on it, unlike the real ContentView launch path).
+        try? BagStore.seedDefaultBagIfEmpty(context)
         let bag = BagStore.activeBag(context)
         let pw = bag.first { $0.category == .wedge && $0.label == "PW" } ?? ClubLegacy.map(rawValue: "pw")
         let dr = bag.first { $0.category == .driver } ?? ClubLegacy.map(rawValue: "dr")

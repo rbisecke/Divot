@@ -186,20 +186,20 @@ final class AppValidationTests: XCTestCase {
 
     func testSeedDefaultBagIsIdempotent() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let first = try ctx.fetch(FetchDescriptor<BagClub>())
         XCTAssertEqual(first.count, 11, "default bag seeds 11 clubs")
         // ordered by sortKey (Driver first, wedges last).
         let ordered = first.sorted { $0.order < $1.order }.map { $0.spec.displayName }
         XCTAssertEqual(ordered, ["Driver","3W","5H","6i","7i","8i","9i","PW","50°","54°","58°"])
         // second call must not duplicate.
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         XCTAssertEqual(try ctx.fetch(FetchDescriptor<BagClub>()).count, 11, "re-seed is a no-op")
     }
 
     func testMigrateLegacySessionBindsToBag() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         // A pre-ClubSpec session: only the legacy clubRaw is set, snapshot empty.
         let session = makeSession(club: pw)
         let legacy = SavedSession(date: session.date, club: pw, angle: .faceOn, hand: .right,
@@ -209,7 +209,7 @@ final class AppValidationTests: XCTestCase {
         ctx.insert(legacy)
         try ctx.save()
 
-        let migrated = BagStore.migrateLegacySessions(ctx)
+        let migrated = try BagStore.migrateLegacySessions(ctx)
         XCTAssertEqual(migrated, 1)
         let row = try XCTUnwrap(try ctx.fetch(FetchDescriptor<SavedSession>()).first)
         XCTAssertNil(row.clubRaw, "legacy raw cleared after migration")
@@ -222,12 +222,12 @@ final class AppValidationTests: XCTestCase {
         XCTAssertNotNil(row.session, "analysis still decodes after migration")
         XCTAssertEqual(try ctx.fetch(FetchDescriptor<BagClub>()).count, 11, "no extra club created")
         // idempotent: a second pass migrates nothing.
-        XCTAssertEqual(BagStore.migrateLegacySessions(ctx), 0)
+        XCTAssertEqual(try BagStore.migrateLegacySessions(ctx), 0)
     }
 
     func testMigrateCreatesClubWhenNotCarried() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)   // default bag has no 56° wedge
+        try BagStore.seedDefaultBagIfEmpty(ctx)   // default bag has no 56° wedge
         let session = makeSession(club: pw)
         let legacy = SavedSession(date: session.date, club: pw, angle: .faceOn, hand: .right,
                                   videoFilename: "old.mov", session: session)
@@ -235,7 +235,7 @@ final class AppValidationTests: XCTestCase {
         ctx.insert(legacy)
         try ctx.save()
 
-        XCTAssertEqual(BagStore.migrateLegacySessions(ctx), 1)
+        XCTAssertEqual(try BagStore.migrateLegacySessions(ctx), 1)
         XCTAssertEqual(try ctx.fetch(FetchDescriptor<BagClub>()).count, 12, "an absent legacy club is added to the bag")
         let row = try XCTUnwrap(try ctx.fetch(FetchDescriptor<SavedSession>()).first)
         XCTAssertEqual(row.club.loft, 56)
@@ -243,7 +243,7 @@ final class AppValidationTests: XCTestCase {
 
     func testRetiredClubStillResolvesHistory() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let seven = try XCTUnwrap(bag.first { $0.category == .iron && $0.number == 7 })
         let saved = SavedSession(date: .now, club: seven, angle: .faceOn, hand: .right,
@@ -293,7 +293,7 @@ final class AppValidationTests: XCTestCase {
 
     func testRetireHidesButKeepsRow() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let total = try ctx.fetchCount(FetchDescriptor<BagClub>())
         let driver = try XCTUnwrap(try ctx.fetch(FetchDescriptor<BagClub>()).first { $0.spec.category == .driver })
         BagEditor.retire(driver, in: ctx)
@@ -305,7 +305,7 @@ final class AppValidationTests: XCTestCase {
 
     func testReorderPersists() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         var clubs = try ctx.fetch(FetchDescriptor<BagClub>()).sorted { $0.order < $1.order }
         let firstID = clubs[0].id
         clubs.reverse()
@@ -316,7 +316,7 @@ final class AppValidationTests: XCTestCase {
 
     func testDeleteRemovesFromBag() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let club = try XCTUnwrap(try ctx.fetch(FetchDescriptor<BagClub>()).first { $0.spec.category == .wedge && $0.spec.loft == 58 })
         BagEditor.delete(club, in: ctx)
         XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<BagClub>()), 10)
@@ -333,7 +333,7 @@ final class AppValidationTests: XCTestCase {
 
     func testCsvClubCodeAutoBinds() throws {
         let ctx = try importContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let bundle = Bundle(for: type(of: self))
         let url = try XCTUnwrap(bundle.url(forResource: "sample_shots", withExtension: "csv"))
@@ -399,7 +399,7 @@ final class AppValidationTests: XCTestCase {
 
     func testPerWedgeTrendsAreDistinct() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let w54 = try XCTUnwrap(bag.first { $0.category == .wedge && $0.loft == 54 })
         let w58 = try XCTUnwrap(bag.first { $0.category == .wedge && $0.loft == 58 })
@@ -428,7 +428,7 @@ final class AppValidationTests: XCTestCase {
 
     func testCapturePickerListsActiveBagInLoftOrder() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         // retire the driver — it must drop out of the picker.
         let driver = try XCTUnwrap(try ctx.fetch(FetchDescriptor<BagClub>()).first { $0.spec.category == .driver })
         BagEditor.retire(driver, in: ctx)
@@ -441,7 +441,7 @@ final class AppValidationTests: XCTestCase {
 
     func testCapturePickerPreselectsLastUsed() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let wedge54 = try XCTUnwrap(bag.first { $0.category == .wedge && $0.loft == 54 })
         // "last used" = the persisted club id.
@@ -451,7 +451,7 @@ final class AppValidationTests: XCTestCase {
 
     func testCapturePickerFallsBackWhenUnset() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let resolved = try XCTUnwrap(BagStore.resolveClub(setting: "", in: bag))
         XCTAssertEqual(resolved.category, .iron, "an unset default resolves to a mid-iron")
@@ -459,7 +459,7 @@ final class AppValidationTests: XCTestCase {
 
     func testCapturePickerSelectionPersistsClubID() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let nine = try XCTUnwrap(bag.first { $0.category == .iron && $0.number == 9 })
         // selecting the 9-iron and saving a session records its stable id.

@@ -9,13 +9,17 @@ enum BagStore {
 
     /// Seed the default bag (Driver, 3W, 5H, 6–9i, PW/50/54/58) the first time the app runs
     /// with an empty bag. Idempotent: a non-empty bag is left untouched.
-    static func seedDefaultBagIfEmpty(_ context: ModelContext) {
-        let count = (try? context.fetchCount(FetchDescriptor<BagClub>())) ?? 0
+    /// Throws rather than swallowing a fetch failure (finding #17): `(try? ...) ?? 0` made a
+    /// transient SwiftData error look identical to "genuinely empty," which would insert a
+    /// second default bag on top of an already-populated one. A thrown fetch now aborts seeding
+    /// for that launch instead of assuming empty.
+    static func seedDefaultBagIfEmpty(_ context: ModelContext) throws {
+        let count = try context.fetchCount(FetchDescriptor<BagClub>())
         guard count == 0 else { return }
         for (i, spec) in Bag.sorted(Bag.defaultBag).enumerated() {
             context.insert(BagClub(spec: spec, order: i))
         }
-        try? context.save()
+        try context.save()
     }
 
     /// Active clubs (not retired), in bag order.
@@ -28,10 +32,13 @@ enum BagStore {
     /// ClubSpec, bind it to a matching bag club (creating one if the legacy club isn't carried),
     /// and write the stable `clubID` + snapshot. Idempotent — a row with `clubRaw == nil` is
     /// already migrated (or was created new). Returns the number of rows migrated.
+    /// Throws rather than treating a fetch failure as "no legacy sessions"/"empty bag" (finding
+    /// #17) — either would risk creating duplicate BagClub rows alongside ones that fetch simply
+    /// failed to return, rather than skipping migration for that launch and trying again later.
     @discardableResult
-    static func migrateLegacySessions(_ context: ModelContext) -> Int {
-        let sessions = (try? context.fetch(FetchDescriptor<SavedSession>())) ?? []
-        var bag = (try? context.fetch(FetchDescriptor<BagClub>())) ?? []
+    static func migrateLegacySessions(_ context: ModelContext) throws -> Int {
+        let sessions = try context.fetch(FetchDescriptor<SavedSession>())
+        var bag = try context.fetch(FetchDescriptor<BagClub>())
         var migrated = 0
         for s in sessions {
             guard let raw = s.clubRaw, !raw.isEmpty else { continue }
@@ -51,7 +58,7 @@ enum BagStore {
             s.clubRaw = nil
             migrated += 1
         }
-        if migrated > 0 { try? context.save() }
+        if migrated > 0 { try context.save() }
         return migrated
     }
 
