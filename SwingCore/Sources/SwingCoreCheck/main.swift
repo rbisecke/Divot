@@ -354,6 +354,38 @@ do { _ = try SwingAnalyzer.analyze(noWristPose(), club: pwSpec, angle: .faceOn);
 catch SwingError.lowPoseConfidence { check(true, "fully-undetected lead wrist throws lowPoseConfidence") }
 catch { check(false, "wrong error for undetected wrist: \(error)") }
 
+// [AngleDetector synthetic] — degenerate-geometry and partial-joint-missing branches, no clip needed.
+print("[AngleDetector synthetic]")
+let zEv = SwingEvent(t: 0, frame: 0)
+let adEvents = SwingEvents(address: zEv, top: zEv, impact: zEv, finish: zEv)
+func adFrame(_ joints: [Joint: JointPoint]) -> PoseSequence {
+    PoseSequence(fps: 30, width: 1000, height: 1000, frames: [PoseFrame(t: 0, joints: joints)])
+}
+// Coincident shoulders/hips ⇒ torsoH <= 1 (degenerate geometry) ⇒ default face-on, confidence 0.
+let coincident = adFrame([
+    .leftShoulder: JointPoint(x: 0.5, y: 0.5, c: 1), .rightShoulder: JointPoint(x: 0.5, y: 0.5, c: 1),
+    .leftHip: JointPoint(x: 0.5, y: 0.5, c: 1), .rightHip: JointPoint(x: 0.5, y: 0.5, c: 1),
+])
+let degenerateDet = AngleDetector.detect(coincident, events: adEvents)
+check(degenerateDet.angle == .faceOn && degenerateDet.confidence == 0, "degenerate geometry (torsoH <= 1) ⇒ face-on, confidence 0")
+// Hips entirely undetected ⇒ mid(leftHip,rightHip) is nil ⇒ same default, no crash.
+let noHips = adFrame([.leftShoulder: JointPoint(x: 0.4, y: 0.7, c: 1), .rightShoulder: JointPoint(x: 0.6, y: 0.7, c: 1)])
+let noHipsDet = AngleDetector.detect(noHips, events: adEvents)
+check(noHipsDet.angle == .faceOn && noHipsDet.confidence == 0, "hips entirely undetected ⇒ face-on, confidence 0, no crash")
+
+// [PoseEstimator error path] — a nonexistent file must throw unreadableVideo carrying the URL,
+// not crash or hang. No clip needed (the path is deliberately bogus).
+print("[PoseEstimator error path]")
+let bogusVideoURL = URL(fileURLWithPath: "/nonexistent/\(UUID().uuidString).mov")
+do {
+    _ = try PoseEstimator.pose(video: bogusVideoURL)
+    check(false, "nonexistent video should throw")
+} catch SwingError.unreadableVideo(let u) {
+    check(u == bogusVideoURL, "nonexistent video throws unreadableVideo carrying the offending URL")
+} catch {
+    check(false, "nonexistent video threw the wrong error: \(error)")
+}
+
 // Faults.swift threshold/severity math — previously only exercised incidentally via one golden
 // fixture (Medium finding). Driven from FaultEvaluator.benchmarks(category:) itself (the public
 // mirror of the internal Benchmarks.defaults/MetricDef this module can't reach directly) rather
@@ -516,6 +548,29 @@ let eb = SwingEvents(address: SwingEvent(t: 2.0, frame: 0), top: SwingEvent(t: 3
 check(abs(EventAlignment.mapTime(1.5, from: ea, to: eb) - 3.4) < 1e-9, "A.impact maps exactly to B.impact")
 check(abs(EventAlignment.mapTime(0.5, from: ea, to: eb) - 2.5) < 1e-9, "midpoint address→top interpolates")
 check(EventAlignment.mapTime(-1, from: ea, to: eb) == 2.0 && EventAlignment.mapTime(9, from: ea, to: eb) == 5.0, "clamps to B endpoints")
+// Test-coverage gap: two adjacent events sharing a timestamp must never produce NaN/crash from a
+// 0/0 division. mapTime's own `denom > 0 ? ... : 0` ternary turns out to be unreachable dead code
+// given the function's structure (each interval's shared boundary point is always claimed first by
+// whichever earlier, non-degenerate interval reaches it, or is excluded by the `t <= ax[0]`/
+// `t >= ax[3]` guards when the degenerate pair sits at either end) — verified by tracing every
+// case by hand. So instead of trying to force that specific line, this checks the guarantee that
+// actually matters to a caller: mapTime stays finite and reasonable across several
+// degenerate-adjacent-event shapes (top==impact; address==top; address==top==impact).
+let degenerateShapes: [(String, SwingEvents)] = [
+    ("top==impact", SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 1.0, frame: 30),
+                                impact: SwingEvent(t: 1.0, frame: 30), finish: SwingEvent(t: 3.0, frame: 90))),
+    ("address==top", SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 0, frame: 0),
+                                 impact: SwingEvent(t: 1.5, frame: 45), finish: SwingEvent(t: 3.0, frame: 90))),
+    ("address==top==impact", SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 0, frame: 0),
+                                         impact: SwingEvent(t: 0, frame: 0), finish: SwingEvent(t: 3.0, frame: 90))),
+]
+for (name, degenerate) in degenerateShapes {
+    var allFinite = true
+    for t in stride(from: -0.5, through: 3.5, by: 0.25) {
+        if !EventAlignment.mapTime(t, from: degenerate, to: eb).isFinite { allFinite = false; break }
+    }
+    check(allFinite, "\(name): mapTime stays finite across the whole domain, no crash/NaN")
+}
 
 // [P2.5] HapticBeats — pure.
 print("[HapticBeats]")
@@ -572,6 +627,20 @@ let inOrderLeft = SequenceEngine.compute(seqPoseLeft(pelvis: 2, torso: 4, arm: 6
 check(inOrderLeft.inSequence, "hand: .left pelvis→torso→arm→hand ⇒ inSequence true")
 let reversedLeft = SequenceEngine.compute(seqPoseLeft(pelvis: 8, torso: 6, arm: 4, hand: 2), events: seqEvents, hand: .left)
 check(!reversedLeft.inSequence, "hand: .left reversed order ⇒ inSequence false")
+
+// Test-coverage gaps: n<3 guard, and hi/lo clamping when events sit at/past the sequence end.
+let tinyPose0 = PoseSequence(fps: 30, width: 1000, height: 1000, frames: [])
+let tinyResult0 = SequenceEngine.compute(tinyPose0, events: seqEvents)
+check(tinyResult0.order.isEmpty && tinyResult0.peakTimes.isEmpty && !tinyResult0.inSequence, "n=0 ⇒ empty/false, no crash")
+let tinyPose2 = PoseSequence(fps: 30, width: 1000, height: 1000,
+                             frames: [PoseFrame(t: 0, joints: [:]), PoseFrame(t: 1/30, joints: [:])])
+let tinyResult2 = SequenceEngine.compute(tinyPose2, events: seqEvents)
+check(tinyResult2.order.isEmpty && tinyResult2.peakTimes.isEmpty && !tinyResult2.inSequence, "n=2 (< 3) ⇒ empty/false, no crash")
+// impact.frame beyond the sequence's last index must clamp hi to n-1, not index out of range.
+let clampEvents = SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 1/30, frame: 1),
+                              impact: SwingEvent(t: 100, frame: 500), finish: SwingEvent(t: 100, frame: 500))
+let clamped = SequenceEngine.compute(seqPose(pelvis: 2, torso: 4, arm: 6, hand: 8), events: clampEvents)
+check(clamped.peakTimes.count == 4, "impact.frame past sequence end still clamps and computes 4 peaks, no crash")
 
 // [P3.1] MLM2PRO CSV parser — golden check against a committed fixture.
 // validate.sh exports SWINGCORE_TEST_CSV at the repo's own ios/DivotTests/Fixtures/sample_shots.csv
