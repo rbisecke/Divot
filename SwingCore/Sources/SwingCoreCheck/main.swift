@@ -900,14 +900,15 @@ check(BallFlightTracer.link([]).isEmpty, "C4 empty ⇒ empty")
 let singlePoint = [(CGPoint(x: 0.4, y: 0.6), 0.9)]
 check(BallFlightTracer.link(singlePoint).count == 1 && BallFlightTracer.link(singlePoint)[0] == singlePoint[0].0,
       "C4 single-point observation returned unchanged")
-// Test-coverage gap, documenting a KNOWN GAP rather than asserting "correct" behavior (Low-priority
-// real fix pending — link always sorts ascending-x regardless of true flight direction, so a
-// right-to-left shot, e.g. a mirrored/lefty setup, gets reordered backwards in time).
+// link(_:leftToRight:) (Low-priority real fix — previously always sorted ascending-x regardless
+// of true flight direction, silently reordering a right-to-left shot, e.g. a mirrored/lefty
+// setup, backwards in time). Default (omitted / true) is unchanged left-to-right behavior;
+// leftToRight: false is the new right-to-left fixture, asserting x is now non-increasing.
 var reverseBobs: [(CGPoint, Double)] = []
 for i in 0..<10 { let x = 1 - Double(i) / 10; reverseBobs.append((CGPoint(x: x, y: 0.9 - x * x), 1)) }   // right-to-left in time
-let reverseLinked = BallFlightTracer.link(reverseBobs)
-check(zip(reverseLinked, reverseLinked.dropFirst()).allSatisfy { Double($0.0.x) <= Double($0.1.x) + 1e-9 },
-      "C4 KNOWN GAP pinned: a right-to-left (reverse) flight still comes out x-ascending, i.e. reordered backwards in time")
+let reverseLinked = BallFlightTracer.link(reverseBobs, leftToRight: false)
+check(zip(reverseLinked, reverseLinked.dropFirst()).allSatisfy { Double($0.0.x) >= Double($0.1.x) - 1e-9 },
+      "C4 right-to-left flight (leftToRight: false) comes out x-non-increasing, preserving true time order")
 
 var dets: [(t: Double, pt: CGPoint?, conf: Double)] = []
 for i in 0..<10 { let ok = i % 3 != 0; dets.append((Double(i) / 30, ok ? CGPoint(x: Double(i) / 10, y: 0.5) : nil, ok ? 0.9 : 0)) }
