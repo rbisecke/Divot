@@ -738,22 +738,19 @@ if let csvPath, let csvText = try? String(contentsOfFile: csvPath, encoding: .ut
     // header-only input → no rows
     check(MLM2ProCSV.parse(csvText.split(separator: "\n").first.map(String.init) ?? "").isEmpty, "header-only ⇒ no rows")
 
-    // Test-coverage gap, PINNING a known bug rather than asserting "correct" behavior (Low-priority
-    // real fix pending, tracked separately — once quote-aware line-splitting lands, flip this to
-    // the corrected 2-row expectation): parse() splits on raw newlines *before* quote-aware field
-    // parsing, so a quoted field with an embedded newline gets mis-split into 3 rows (the correct
-    // 2 logical rows would be here) instead of reading the newline as part of one field. Values
-    // below are the actual empirically-observed parse output for this fixture, not a guess.
+    // Real fix landed (Low-priority): parse() now tokenizes the whole text in one quote-tracking
+    // pass, so a newline inside a quoted field stays part of that field instead of ending the
+    // record early. Was previously PINNED as a known bug (3 mis-split rows instead of 2); now
+    // asserts the corrected behavior.
     let embeddedNewlineCSV = "\"Club Type\",\"Club Brand\",\"Club Model\",\"Carry Distance\"\n" +
         "\"9i\",\"Titleist\",\"Pro\nModel\",\"8.0\"\n" +
         "\"7i\",\"Callaway\",\"X\",\"32.2\"\n"
     let embeddedRows = MLM2ProCSV.parse(embeddedNewlineCSV)
-    check(embeddedRows.count == 3, "KNOWN BUG pinned: embedded newline in a quoted field mis-splits into 3 rows, not the correct 2 (got \(embeddedRows.count))")
-    if embeddedRows.count == 3 {
-        check(embeddedRows[0].clubType == "9i" && embeddedRows[0].clubModel == "Pro" && embeddedRows[0].carryDistance == nil,
-              "row 1 truncated at the embedded newline, losing carryDistance")
-        check(embeddedRows[1].clubType == "Model,8.0", "row 2 is the bogus tail fragment (\(embeddedRows[1].clubType))")
-        check(embeddedRows[2].clubType == "7i" && embeddedRows[2].carryDistance == 32.2, "row 3 is the next real row, unaffected")
+    check(embeddedRows.count == 2, "embedded newline in a quoted field no longer mis-splits (got \(embeddedRows.count), expected 2)")
+    if embeddedRows.count == 2 {
+        check(embeddedRows[0].clubType == "9i" && embeddedRows[0].clubModel == "Pro\nModel" && embeddedRows[0].carryDistance == 8.0,
+              "row 1 keeps the embedded newline as part of clubModel, and reads carryDistance correctly")
+        check(embeddedRows[1].clubType == "7i" && embeddedRows[1].carryDistance == 32.2, "row 2 is the next real row, unaffected")
     }
 } else {
     skip("MLM2ProCSV", "no CSV fixture (set SWINGCORE_TEST_CSV to enable; validate.sh sets a repo default)")

@@ -25,15 +25,13 @@ public struct ShotRow: Codable, Sendable {
 
 public enum MLM2ProCSV {
 
-    /// Parse the export text. The first non-empty line is treated as the header;
+    /// Parse the export text. The first non-blank record is treated as the header;
     /// columns are matched by (normalized) header name, so column order/extra columns are tolerated.
     public static func parse(_ text: String) -> [ShotRow] {
-        let lines = text.split(whereSeparator: { $0 == "\n" || $0 == "\r\n" || $0 == "\r" })
-            .map(String.init)
-            .filter { !$0.trimmingCharacters(in: .whitespaces).isEmpty }
-        guard lines.count >= 2 else { return [] }
+        let recs = records(text).filter { !$0.allSatisfy { $0.trimmingCharacters(in: .whitespaces).isEmpty } }
+        guard recs.count >= 2 else { return [] }
 
-        let header = fields(lines[0]).map { normalize($0) }
+        let header = recs[0].map { normalize($0) }
         func index(_ name: String) -> Int? { header.firstIndex(of: normalize(name)) }
 
         // Column indices (nil if a column is absent in this export variant).
@@ -46,8 +44,7 @@ public enum MLM2ProCSV {
         let iPath = index("Club Path"), iSpin = index("Spin Rate"), iAxis = index("Spin Axis")
 
         var rows: [ShotRow] = []
-        for line in lines.dropFirst() {
-            let f = fields(line)
+        for f in recs.dropFirst() {
             // A row needs at least a club type to be meaningful; skip malformed/short lines.
             guard let ci = iClub, ci < f.count else { continue }
             let club = str(f, ci)
@@ -83,13 +80,23 @@ public enum MLM2ProCSV {
         return Double(s)
     }
 
-    /// Split one CSV line into fields, honoring double-quoted values and escaped quotes ("").
-    private static func fields(_ line: String) -> [String] {
-        var out: [String] = []
+    /// Split the whole CSV text into records of fields, honoring double-quoted values (with
+    /// escaped `""`) and, critically, a newline *inside* a quoted field — which is legal CSV and
+    /// must stay part of that field's value rather than ending the record early. Previously this
+    /// tokenized line-by-line (`text.split` on raw `\n`/`\r\n`/`\r` up front, then a per-line
+    /// `fields` splitter), so a quoted field containing an embedded newline got cut in two before
+    /// the quote-aware splitter ever saw it, mis-splitting one logical row into extra bogus ones.
+    /// Walking the entire text in a single quote-tracking pass fixes that: only an *unquoted*
+    /// newline ends a record.
+    private static func records(_ text: String) -> [[String]] {
+        var out: [[String]] = []
+        var row: [String] = []
         var cur = ""
         var inQuotes = false
-        let chars = Array(line)
+        let chars = Array(text)
         var k = 0
+        func endField() { row.append(cur); cur = "" }
+        func endRow() { endField(); out.append(row); row = [] }
         while k < chars.count {
             let c = chars[k]
             if inQuotes {
@@ -99,12 +106,17 @@ public enum MLM2ProCSV {
                 } else { cur.append(c) }
             } else {
                 if c == "\"" { inQuotes = true }
-                else if c == "," { out.append(cur); cur = "" }
+                else if c == "," { endField() }
+                else if c == "\r" {
+                    if k + 1 < chars.count && chars[k + 1] == "\n" { k += 1 }
+                    endRow()
+                } else if c == "\n" { endRow() }
                 else { cur.append(c) }
             }
             k += 1
         }
-        out.append(cur)
+        // Final record, if the text didn't end on a newline.
+        if !cur.isEmpty || !row.isEmpty { endRow() }
         return out
     }
 }
