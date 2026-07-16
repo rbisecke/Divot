@@ -173,7 +173,14 @@ struct ImportView: View {
         let saved = SavedSession(date: Date(), club: club, angle: angle.wrappedValue,
                                  hand: hand, videoFilename: filename, session: session)
         context.insert(saved)
-        try? context.save()
+        do { try context.save() }
+        catch {
+            // Reuses AnalysisStore's existing error surface (Medium finding: this write silently
+            // swallowed a persistence failure, so the UI showed success even when the just-run
+            // analysis was never actually saved).
+            store.error = "Couldn't save the analysis: \(error.localizedDescription)"
+            return
+        }
         pickedURL = nil
         pickedItem = nil
         navSession = saved

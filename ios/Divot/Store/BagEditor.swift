@@ -7,31 +7,33 @@ import SwingCore
 /// spec builders. Kept out of the View so the rules are unit-testable against a container.
 enum BagEditor {
 
-    /// Append a club to the end of the bag.
-    static func add(_ spec: ClubSpec, to context: ModelContext) {
-        let maxOrder = (try? context.fetch(FetchDescriptor<BagClub>()))?.map(\.order).max() ?? -1
+    /// Append a club to the end of the bag. Throws rather than swallowing a persistence
+    /// failure (Medium finding: widespread `try? context.save()` let the UI show success even
+    /// when the write to disk failed, with the loss only discovered on next launch).
+    static func add(_ spec: ClubSpec, to context: ModelContext) throws {
+        let maxOrder = try context.fetch(FetchDescriptor<BagClub>()).map(\.order).max() ?? -1
         context.insert(BagClub(spec: spec, order: maxOrder + 1))
-        try? context.save()
+        try context.save()
     }
 
-    static func retire(_ club: BagClub, in context: ModelContext) {
-        club.retired = true; try? context.save()
+    static func retire(_ club: BagClub, in context: ModelContext) throws {
+        club.retired = true; try context.save()
     }
 
-    static func restore(_ club: BagClub, in context: ModelContext) {
-        club.retired = false; try? context.save()
+    static func restore(_ club: BagClub, in context: ModelContext) throws {
+        club.retired = false; try context.save()
     }
 
     /// Permanently remove a club. Past sessions keep their own ClubSpec snapshot, so this
     /// doesn't erase history; it only drops the club from the bag.
-    static func delete(_ club: BagClub, in context: ModelContext) {
-        context.delete(club); try? context.save()
+    static func delete(_ club: BagClub, in context: ModelContext) throws {
+        context.delete(club); try context.save()
     }
 
     /// Persist a new ordering (indices become `order`).
-    static func reorder(_ clubs: [BagClub], in context: ModelContext) {
+    static func reorder(_ clubs: [BagClub], in context: ModelContext) throws {
         for (i, c) in clubs.enumerated() { c.order = i }
-        try? context.save()
+        try context.save()
     }
 
     /// Build a wedge spec. A name (e.g. "Sand wedge") prefills the loft and suggests a letter

@@ -284,7 +284,7 @@ final class AppValidationTests: XCTestCase {
 
     func testDuplicateWedgesPersistDistinctly() throws {
         let ctx = try bagContainer()
-        for l in [50.0, 54.0, 58.0] { BagEditor.add(BagEditor.wedgeSpec(loft: l), to: ctx) }
+        for l in [50.0, 54.0, 58.0] { try BagEditor.add(BagEditor.wedgeSpec(loft: l), to: ctx) }
         let wedges = try ctx.fetch(FetchDescriptor<BagClub>()).filter { $0.spec.category == .wedge }
         XCTAssertEqual(wedges.count, 3)
         XCTAssertEqual(Set(wedges.compactMap { $0.spec.loft }), [50, 54, 58])
@@ -296,10 +296,10 @@ final class AppValidationTests: XCTestCase {
         try BagStore.seedDefaultBagIfEmpty(ctx)
         let total = try ctx.fetchCount(FetchDescriptor<BagClub>())
         let driver = try XCTUnwrap(try ctx.fetch(FetchDescriptor<BagClub>()).first { $0.spec.category == .driver })
-        BagEditor.retire(driver, in: ctx)
+        try BagEditor.retire(driver, in: ctx)
         XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<BagClub>()), total, "retire keeps the row")
         XCTAssertFalse(BagStore.activeBag(ctx).contains { $0.category == .driver }, "retired club leaves the active bag")
-        BagEditor.restore(driver, in: ctx)
+        try BagEditor.restore(driver, in: ctx)
         XCTAssertTrue(BagStore.activeBag(ctx).contains { $0.category == .driver }, "restore brings it back")
     }
 
@@ -309,7 +309,7 @@ final class AppValidationTests: XCTestCase {
         var clubs = try ctx.fetch(FetchDescriptor<BagClub>()).sorted { $0.order < $1.order }
         let firstID = clubs[0].id
         clubs.reverse()
-        BagEditor.reorder(clubs, in: ctx)
+        try BagEditor.reorder(clubs, in: ctx)
         let reread = try ctx.fetch(FetchDescriptor<BagClub>()).sorted { $0.order < $1.order }
         XCTAssertEqual(reread.last?.id, firstID, "the previously-first club is now last")
     }
@@ -318,7 +318,7 @@ final class AppValidationTests: XCTestCase {
         let ctx = try bagContainer()
         try BagStore.seedDefaultBagIfEmpty(ctx)
         let club = try XCTUnwrap(try ctx.fetch(FetchDescriptor<BagClub>()).first { $0.spec.category == .wedge && $0.spec.loft == 58 })
-        BagEditor.delete(club, in: ctx)
+        try BagEditor.delete(club, in: ctx)
         XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<BagClub>()), 10)
         XCTAssertFalse(try ctx.fetch(FetchDescriptor<BagClub>()).contains { $0.spec.loft == 58 })
     }
@@ -353,8 +353,8 @@ final class AppValidationTests: XCTestCase {
     func testAmbiguousWedgeCodeConfirmsOnceThenPersists() throws {
         let ctx = try importContainer()
         // A bag with two sand-range wedges makes "sw" ambiguous.
-        BagEditor.add(ClubSpec(category: .wedge, loft: 54), to: ctx)
-        BagEditor.add(ClubSpec(category: .wedge, loft: 56), to: ctx)
+        try BagEditor.add(ClubSpec(category: .wedge, loft: 54), to: ctx)
+        try BagEditor.add(ClubSpec(category: .wedge, loft: 56), to: ctx)
         let bag = BagStore.activeBag(ctx)
         let rows = MLM2ProCSV.parse("Club Type\nsw\nsw")
 
@@ -364,7 +364,7 @@ final class AppValidationTests: XCTestCase {
 
         // User picks the 54° wedge; the choice persists.
         let w54 = try XCTUnwrap(bag.first { $0.loft == 54 })
-        OverrideStore.set(code: "sw", clubID: w54.id, in: ctx)
+        try OverrideStore.set(code: "sw", clubID: w54.id, in: ctx)
 
         // Second import: no confirmation, "sw" now auto-binds to the chosen 54°.
         res = ClubCodeResolver.resolve(rows: rows, bag: bag, overrides: OverrideStore.all(ctx))
@@ -375,9 +375,9 @@ final class AppValidationTests: XCTestCase {
     func testOverrideStoreUpdatesInPlace() throws {
         let ctx = try importContainer()
         let a = UUID(), b = UUID()
-        OverrideStore.set(code: "gw", clubID: a, in: ctx)
+        try OverrideStore.set(code: "gw", clubID: a, in: ctx)
         XCTAssertEqual(OverrideStore.all(ctx)["gw"], a)
-        OverrideStore.set(code: "gw", clubID: b, in: ctx)
+        try OverrideStore.set(code: "gw", clubID: b, in: ctx)
         XCTAssertEqual(OverrideStore.all(ctx)["gw"], b, "re-confirming updates rather than duplicating")
         XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<MLM2ProOverride>()), 1)
     }
@@ -431,7 +431,7 @@ final class AppValidationTests: XCTestCase {
         try BagStore.seedDefaultBagIfEmpty(ctx)
         // retire the driver — it must drop out of the picker.
         let driver = try XCTUnwrap(try ctx.fetch(FetchDescriptor<BagClub>()).first { $0.spec.category == .driver })
-        BagEditor.retire(driver, in: ctx)
+        try BagEditor.retire(driver, in: ctx)
 
         let picker = BagStore.activeBag(ctx)
         XCTAssertFalse(picker.contains { $0.category == .driver }, "retired club is not offered")

@@ -68,7 +68,8 @@ struct CSVImportView: View {
             }
             .sheet(item: $pending) { p in
                 ConfirmClubSheet(code: p.code, bag: activeBag) { club in
-                    OverrideStore.set(code: p.code, clubID: club.id, in: context)
+                    do { try OverrideStore.set(code: p.code, clubID: club.id, in: context) }
+                    catch { self.error = "Couldn't save: \(error.localizedDescription)" }
                     pending = nil
                     resolveAndProceed()
                 }
