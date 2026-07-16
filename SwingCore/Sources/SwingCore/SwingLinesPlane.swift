@@ -16,7 +16,11 @@ public extension SwingLines {
     /// (lead-wrist grip → ball), extended slightly past both ends for drawing.
     /// Falls back to the lead-arm line when the ball isn't known.
     static func shaftPlane(_ pose: PoseSequence, events: SwingEvents, hand: Hand = .right, ball: CGPoint?) -> SwingLine {
-        let leadArm = SwingLines.lines(pose, at: events.address.frame, hand: hand)["leadArm"]
+        shaftPlane(JointSeries(pose), events: events, hand: hand, ball: ball)
+    }
+    /// JointSeries-accepting overload — see EventDetector.detect's overload for why.
+    internal static func shaftPlane(_ s: JointSeries, events: SwingEvents, hand: Hand = .right, ball: CGPoint?) -> SwingLine {
+        let leadArm = SwingLines.lines(s, at: events.address.frame, hand: hand)["leadArm"]
         let grip = leadArm?.b  // leadArm = shoulder(a) → wrist(b)
         guard let ball = ball, ball.x.isFinite, ball.y.isFinite, let grip = grip else {
             return leadArm ?? SwingLine(a: CGPoint(x: 0.5, y: 0.4), b: CGPoint(x: 0.5, y: 0.9))

@@ -10,7 +10,10 @@ public enum AngleDetector {
     static let threshold = 0.55
 
     public static func detect(_ pose: PoseSequence, events: SwingEvents) -> (angle: Angle, confidence: Double) {
-        let s = JointSeries(pose)
+        detect(JointSeries(pose), events: events)
+    }
+    /// JointSeries-accepting overload — see EventDetector.detect's overload for why.
+    static func detect(_ s: JointSeries, events: SwingEvents) -> (angle: Angle, confidence: Double) {
         guard s.n > 0 else { return (.faceOn, 0) }
         let f = min(max(events.address.frame, 0), s.n - 1)
 

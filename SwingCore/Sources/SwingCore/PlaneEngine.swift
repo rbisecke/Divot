@@ -24,8 +24,15 @@ public enum PlaneEngine {
 
     public static func analyze(_ pose: PoseSequence, events: SwingEvents, angle: Angle = .faceOn,
                                hand: Hand = .right, ball: CGPoint?, clubPath: [CGPoint]? = nil) -> PlaneAnalysis {
-        let plane = SwingLines.shaftPlane(pose, events: events, hand: hand, ball: ball)
-        let path = clubPath ?? SwingLines.handPath(pose, from: events.top.frame, to: events.impact.frame, hand: hand)
+        analyze(JointSeries(pose), events: events, angle: angle, hand: hand, ball: ball, clubPath: clubPath)
+    }
+    /// JointSeries-accepting overload — see EventDetector.detect's overload for why. Threads the
+    /// same series into SwingLines.shaftPlane/handPath too, instead of each separately rebuilding
+    /// their own from the pose.
+    static func analyze(_ s: JointSeries, events: SwingEvents, angle: Angle = .faceOn,
+                        hand: Hand = .right, ball: CGPoint?, clubPath: [CGPoint]? = nil) -> PlaneAnalysis {
+        let plane = SwingLines.shaftPlane(s, events: events, hand: hand, ball: ball)
+        let path = clubPath ?? SwingLines.handPath(s, from: events.top.frame, to: events.impact.frame, hand: hand)
         let src = clubPath != nil ? "club" : "hand"
 
         // unit normal of the plane (top-left space)
@@ -43,7 +50,6 @@ public enum PlaneEngine {
         let nx = (-dy / len) * mirror, ny = (dx / len) * mirror
 
         // shoulder width (normalized) at address for scale
-        let s = JointSeries(pose)
         let a = min(max(events.address.frame, 0), max(s.n - 1, 0))
         let sdx = s.jx(.leftShoulder)[a] - s.jx(.rightShoulder)[a]
         let sdy = s.jy(.leftShoulder)[a] - s.jy(.rightShoulder)[a]

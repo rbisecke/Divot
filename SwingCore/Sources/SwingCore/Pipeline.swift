@@ -18,8 +18,14 @@ public enum SwingAnalyzer {
         // which only decides whether a joint counts as detected within a single frame.
         let leadDetected = pose.frames.filter { $0.joints[hand.leadWrist] != nil }.count
         guard Double(leadDetected) / Double(pose.frames.count) >= 0.5 else { throw SwingError.lowPoseConfidence }
-        let ev = EventDetector.detect(pose, hand: hand)
-        let met = MetricsEngine.compute(pose, events: ev, angle: angle, hand: hand)
+        // Built once and threaded through every downstream call below instead of each one
+        // separately rebuilding its own from `pose` (Medium finding: "JointSeries rebuilt
+        // redundantly 5-12x per swing/screen load"). Output is unchanged by construction — every
+        // JointSeries-accepting overload below is the exact same code the PoseSequence-taking
+        // wrapper used to run inline, just no longer recomputing the series itself.
+        let series = JointSeries(pose)
+        let ev = EventDetector.detect(series, hand: hand)
+        let met = MetricsEngine.compute(series, events: ev, angle: angle, hand: hand)
         let faults = FaultEvaluator.evaluate(met, category: club.category, angle: angle)
         var comparison: Comparison?
         if let ref = ReferenceStore.template(category: club.category, angle: angle) {
@@ -28,7 +34,7 @@ public enum SwingAnalyzer {
         }
         var plane: PlaneAnalysis?
         if pose.frames.count >= 5 {
-            plane = PlaneEngine.analyze(pose, events: ev, angle: angle, hand: hand, ball: nil)
+            plane = PlaneEngine.analyze(series, events: ev, angle: angle, hand: hand, ball: nil)
         }
         return SwingAnalysis(index: index, events: ev, metrics: met, faults: faults, comparison: comparison, plane: plane)
     }

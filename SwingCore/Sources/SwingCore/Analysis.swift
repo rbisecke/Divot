@@ -8,6 +8,7 @@ import Foundation
 struct JointSeries {
     let n: Int
     let w: Double, h: Double
+    let fps: Double
     let times: [Double]
     private var xs: [Joint: [Double]] = [:]
     private var ys: [Joint: [Double]] = [:]
@@ -15,6 +16,7 @@ struct JointSeries {
     init(_ pose: PoseSequence) {
         n = pose.frames.count
         w = Double(pose.width); h = Double(pose.height)
+        fps = pose.fps
         times = pose.frames.map { $0.t }
         for j in Joint.allCases {
             var x = [Double](repeating: .nan, count: n), y = x
@@ -66,7 +68,14 @@ private func argmin(_ a: [Double], _ lo: Int, _ hi: Int) -> Int { var bi = lo, b
 
 public enum EventDetector {
     public static func detect(_ pose: PoseSequence, hand: Hand = .right) -> SwingEvents {
-        let s = JointSeries(pose); let n = s.n
+        detect(JointSeries(pose), hand: hand)
+    }
+    /// JointSeries-accepting overload: lets a caller that already built a series for this pose
+    /// (e.g. SwingAnalyzer.analyze, which also feeds MetricsEngine/PlaneEngine from the same one)
+    /// skip rebuilding it — JointSeries.init does a per-joint interpolation + smoothing pass over
+    /// every frame, and was previously rebuilt 5-12x per swing/screen load for identical input.
+    static func detect(_ s: JointSeries, hand: Hand = .right) -> SwingEvents {
+        let n = s.n
         let lead: Joint = hand.leadWrist
         let lwx = s.jx(lead), lwy = s.jy(lead)
         var speed = [Double](repeating: 0, count: n)
@@ -86,7 +95,10 @@ public enum EventDetector {
 
 public enum MetricsEngine {
     public static func compute(_ pose: PoseSequence, events: SwingEvents, angle: Angle, hand: Hand = .right) -> SwingMetrics {
-        let s = JointSeries(pose)
+        compute(JointSeries(pose), events: events, angle: angle, hand: hand)
+    }
+    /// JointSeries-accepting overload — see EventDetector.detect's overload for why.
+    static func compute(_ s: JointSeries, events: SwingEvents, angle: Angle, hand: Hand = .right) -> SwingMetrics {
         let lead = hand == .left ? "right" : "left", trail = hand == .left ? "left" : "right"
         func J(_ side: String, _ part: String) -> Joint { Joint(rawValue: side + part)! }
         let a = events.address.frame, top = events.top.frame, imp = events.impact.frame
@@ -132,7 +144,7 @@ public enum MetricsEngine {
             let d = (v1x*v2x+v1y*v2y) / ((v1x*v1x+v1y*v1y).squareRoot() * (v2x*v2x+v2y*v2y).squareRoot() + 1e-9)
             return acos(max(-1, min(1, d))) * 180 / .pi
         }
-        let fps = pose.fps > 0 ? pose.fps : 30
+        let fps = s.fps > 0 ? s.fps : 30
         let postImpact = min(imp + Int(0.12 * fps), s.n - 1)
         let laA = jointAngle(s.jx(J(lead, "Shoulder"))[postImpact], s.jy(J(lead, "Shoulder"))[postImpact], s.jx(J(lead, "Elbow"))[postImpact], s.jy(J(lead, "Elbow"))[postImpact], s.jx(J(lead, "Wrist"))[postImpact], s.jy(J(lead, "Wrist"))[postImpact])
         m.leadArmBendDeg = r1(max(0, 180 - laA))
