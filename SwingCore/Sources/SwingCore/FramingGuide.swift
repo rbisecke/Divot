@@ -22,8 +22,14 @@ public enum FramingGuide {
                 return (false, "Move to center — you're at the edge")
             }
         }
-        // Vision coords are bottom-left (y up), so head sits above the ankles.
-        let ankleY = min(joints[.leftAnkle]!.y, joints[.rightAnkle]!.y)
+        // Vision coords are bottom-left (y up), so head sits above the ankles. Both ankles are
+        // already guaranteed present by the `required` loop above; `guard let` here (matching the
+        // head/ear lookup two lines up) is defense-in-depth against a future edit to `required`
+        // rather than a reachable path today.
+        guard let lAnkle = joints[.leftAnkle], let rAnkle = joints[.rightAnkle] else {
+            return (false, "Step back — full body not visible")
+        }
+        let ankleY = min(lAnkle.y, rAnkle.y)
         let extent = head.y - ankleY
         if extent < 0.45 { return (false, "Step closer — you're too small in frame") }
         if extent > 0.97 { return (false, "Step back — you're too close") }
