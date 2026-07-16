@@ -74,6 +74,16 @@ final class CaptureController: NSObject, ObservableObject,
     // consulted in the fileOutput delegate callback to discard the half-finalized clip.
     private var pendingTeardown = false
 
+    /// Backstop against a leaked delegate/running session if a `CaptureController` is ever
+    /// deallocated without going through `stop()` first (finding Low). `sessionQueue.sync` matches
+    /// every other session/output mutation's queue confinement above.
+    deinit {
+        sessionQueue.sync {
+            videoOutput.setSampleBufferDelegate(nil, queue: nil)
+            if session.isRunning { session.stopRunning() }
+        }
+    }
+
     func requestAndConfigure() {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
             guard let self else { return }
