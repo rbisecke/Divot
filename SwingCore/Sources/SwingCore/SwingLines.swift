@@ -25,7 +25,7 @@ public enum SwingLines {
         let f = min(max(frame, 0), s.n - 1)
         let lead = hand == .left ? "right" : "left"
         let trail = hand == .left ? "left" : "right"
-        func J(_ side: String, _ part: String) -> Joint { Joint(rawValue: side + part)! }
+        func J(_ side: String, _ part: String) -> Joint { Joint.bySideAndPart(side, part) }
 
         // point in top-left normalized coords, or nil if not finite
         func P(_ j: Joint) -> CGPoint? {

@@ -100,7 +100,7 @@ public enum MetricsEngine {
     /// JointSeries-accepting overload — see EventDetector.detect's overload for why.
     static func compute(_ s: JointSeries, events: SwingEvents, angle: Angle, hand: Hand = .right) -> SwingMetrics {
         let lead = hand == .left ? "right" : "left", trail = hand == .left ? "left" : "right"
-        func J(_ side: String, _ part: String) -> Joint { Joint(rawValue: side + part)! }
+        func J(_ side: String, _ part: String) -> Joint { Joint.bySideAndPart(side, part) }
         let a = events.address.frame, top = events.top.frame, imp = events.impact.frame
         var m = SwingMetrics()
 

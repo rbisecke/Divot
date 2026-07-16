@@ -22,6 +22,17 @@ public enum Joint: String, Codable, CaseIterable, Sendable {
     case leftHip, rightHip, leftKnee, rightKnee, leftAnkle, rightAnkle, root
 }
 
+public extension Joint {
+    /// Consolidates a force-unwrapped `Joint(rawValue: side + part)!` helper that was previously
+    /// copy-pasted in Analysis.swift, SwingLines.swift, and SequenceEngine.swift (Low-priority
+    /// finding) — safe today only because every call site happens to pass matching literals, with
+    /// no compile-time safety against a future typo. Falls back instead of crashing if the
+    /// combination doesn't name a real case.
+    static func bySideAndPart(_ side: String, _ part: String) -> Joint {
+        Joint(rawValue: side + part) ?? .leftWrist
+    }
+}
+
 /// Swing phases (subset of the 8 GolfDB events we compute).
 public enum Phase: String, Codable, CaseIterable, Sendable { case address, top, impact, finish }
 

@@ -144,6 +144,12 @@ do {
     check(back.headRiseCm == -6.4 && back.leadArmBendDeg == 24.6, "SwingMetrics Codable round-trip")
 } catch { print("  ✗ FAIL: Codable threw \(error)"); failures += 1; total += 1 }
 
+// Joint.bySideAndPart consolidates a force-unwrapped helper previously copy-pasted in
+// Analysis.swift/SwingLines.swift/SequenceEngine.swift (Low-priority finding).
+check(Joint.bySideAndPart("left", "Wrist") == .leftWrist, "valid combination resolves correctly")
+check(Joint.bySideAndPart("right", "Ankle") == .rightAnkle, "valid combination resolves correctly (2)")
+check(Joint.bySideAndPart("bogus", "Nonsense") == .leftWrist, "invalid combination falls back instead of crashing")
+
 // [S1] Pose — integration check against a real clip (CLI oracle: 126 frames, all detected).
 // Skips gracefully if the clip isn't present (keeps the harness portable).
 print("[Pose]")
