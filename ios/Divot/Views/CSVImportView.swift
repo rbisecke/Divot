@@ -82,13 +82,22 @@ struct CSVImportView: View {
         switch result {
         case .failure(let e): error = e.localizedDescription
         case .success(let url):
-            let scoped = url.startAccessingSecurityScopedResource()
-            defer { if scoped { url.stopAccessingSecurityScopedResource() } }
-            guard let text = try? String(contentsOf: url, encoding: .utf8) else {
-                error = "Couldn't read the CSV file."; return
+            // Previously a synchronous String(contentsOf:encoding:) read on the main thread
+            // (finding Low) — a large CSV would stall the UI while the file importer's sheet
+            // dismisses. The security-scoped access stays paired within this Task so it's held
+            // for the whole read; only the blocking read itself moves off-main.
+            Task {
+                let scoped = url.startAccessingSecurityScopedResource()
+                defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+                let text = await Task.detached(priority: .userInitiated) {
+                    try? String(contentsOf: url, encoding: .utf8)
+                }.value
+                guard let text else {
+                    error = "Couldn't read the CSV file."; return
+                }
+                rows = MLM2ProCSV.parse(text)
+                resolveAndProceed()
             }
-            rows = MLM2ProCSV.parse(text)
-            resolveAndProceed()
         }
     }
 
