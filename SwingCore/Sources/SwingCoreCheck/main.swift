@@ -354,6 +354,65 @@ do { _ = try SwingAnalyzer.analyze(noWristPose(), club: pwSpec, angle: .faceOn);
 catch SwingError.lowPoseConfidence { check(true, "fully-undetected lead wrist throws lowPoseConfidence") }
 catch { check(false, "wrong error for undetected wrist: \(error)") }
 
+// Faults.swift threshold/severity math — previously only exercised incidentally via one golden
+// fixture (Medium finding). Driven from FaultEvaluator.benchmarks(category:) itself (the public
+// mirror of the internal Benchmarks.defaults/MetricDef this module can't reach directly) rather
+// than hardcoded numbers, so the test can't silently drift from the real thresholds.
+print("[Faults synthetic]")
+// .iron has no entry in Benchmarks.overrides, so this is pure Benchmarks.defaults for every metric.
+for info in FaultEvaluator.benchmarks(category: .iron) {
+    let span = max(abs(info.fault - info.good), 0.1)
+    func metrics(_ v: Double) -> SwingMetrics { var m = SwingMetrics(); m[info.key] = v; return m }
+    // A metric outside its benchmark's angle family must never fire, regardless of value.
+    let allAngles = Set(Angle.allCases)
+    let offAngles = info.angles.map { allAngles.subtracting($0) } ?? []
+    // Any angle within the metric's own family fires identically (angle only gates which
+    // benchmarks apply, not the threshold math) — trail_knee_flex_loss_deg's family is DTL-only,
+    // so a hardcoded .faceOn would never fire for it regardless of value.
+    let validAngle = info.angles?.first ?? .faceOn
+
+    if info.higherIsBetter {
+        // direction .min: fires when v < fault; "just/far past" means further below fault.
+        let atFault = FaultEvaluator.evaluate(metrics(info.fault), category: .iron, angle: validAngle)
+        check(!atFault.contains { $0.code == info.faultCode }, "\(info.key): v == fault must not fire (strict <)")
+        let justPast = FaultEvaluator.evaluate(metrics(info.fault - span * 0.1), category: .iron, angle: validAngle)
+        if let f = justPast.first(where: { $0.code == info.faultCode }) {
+            check(f.severity > 0 && f.severity <= 1, "\(info.key): just past fault fires, severity in (0,1] (got \(f.severity))")
+        } else { check(false, "\(info.key): just past fault (below) should fire") }
+        let farPast = FaultEvaluator.evaluate(metrics(info.fault - span * 10), category: .iron, angle: validAngle)
+        if let f = farPast.first(where: { $0.code == info.faultCode }) {
+            check(f.severity == 1.0, "\(info.key): far past fault clamps severity to 1.0 (got \(f.severity))")
+        } else { check(false, "\(info.key): far past fault (below) should fire") }
+    } else {
+        // direction .max: fires when v > fault; "just/far past" means further above fault.
+        let atFault = FaultEvaluator.evaluate(metrics(info.fault), category: .iron, angle: validAngle)
+        check(!atFault.contains { $0.code == info.faultCode }, "\(info.key): v == fault must not fire (strict >)")
+        let justPast = FaultEvaluator.evaluate(metrics(info.fault + span * 0.1), category: .iron, angle: validAngle)
+        if let f = justPast.first(where: { $0.code == info.faultCode }) {
+            check(f.severity > 0 && f.severity <= 1, "\(info.key): just past fault fires, severity in (0,1] (got \(f.severity))")
+        } else { check(false, "\(info.key): just past fault (above) should fire") }
+        let farPast = FaultEvaluator.evaluate(metrics(info.fault + span * 10), category: .iron, angle: validAngle)
+        if let f = farPast.first(where: { $0.code == info.faultCode }) {
+            check(f.severity == 1.0, "\(info.key): far past fault clamps severity to 1.0 (got \(f.severity))")
+        } else { check(false, "\(info.key): far past fault (above) should fire") }
+    }
+
+    // Wrong angle family never fires, however far past the threshold.
+    let extremeValue = info.higherIsBetter ? info.fault - span * 10 : info.fault + span * 10
+    for off in offAngles {
+        let firedWrongAngle = FaultEvaluator.evaluate(metrics(extremeValue), category: .iron, angle: off)
+        check(!firedWrongAngle.contains { $0.code == info.faultCode }, "\(info.key): never fires for \(off.rawValue) (wrong angle family)")
+    }
+}
+// Override application: weight_lead_pct_est at 62 must not fire hanging_back under .driver's
+// override (good 60/fault 50, direction .min ⇒ fires only below 50) but must fire under .wedge's
+// default-derived override (good 85/fault 75 ⇒ fires below 75).
+var wOv = SwingMetrics(); wOv.weightLeadPctEst = 62
+let driverFaults = FaultEvaluator.evaluate(wOv, category: .driver, angle: .faceOn)
+check(!driverFaults.contains { $0.code == "hanging_back" }, "weight_lead_pct_est 62 ⇒ no hanging_back under .driver override (60/50)")
+let wedgeFaults = FaultEvaluator.evaluate(wOv, category: .wedge, angle: .faceOn)
+check(wedgeFaults.contains { $0.code == "hanging_back" }, "weight_lead_pct_est 62 ⇒ hanging_back fires under .wedge override (85/75)")
+
 // [P1.5] Trends — pure aggregation over synthetic sessions (no clip needed).
 print("[Trends]")
 // Two sessions share ONE wedge identity (same ClubSpec.id) so per-club trends group correctly.

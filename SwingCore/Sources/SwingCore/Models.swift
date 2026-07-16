@@ -3,7 +3,7 @@ import CoreGraphics
 
 // MARK: - Enums
 
-public enum Angle: String, Codable, Sendable { case faceOn = "face_on", dtl }
+public enum Angle: String, Codable, CaseIterable, Sendable { case faceOn = "face_on", dtl }
 public enum Hand: String, Codable, Sendable { case right = "R", left = "L" }
 
 public extension Hand {
@@ -79,17 +79,36 @@ public struct SwingMetrics: Codable, Sendable {
     public var trailKneeFlexLossDeg: Double?
     public init() {}
     public subscript(key: String) -> Double? {
-        switch key {
-        case "head_sway_in": return headSwayIn
-        case "head_rise_cm": return headRiseCm
-        case "spine_loss_deg": return spineLossDeg
-        case "pelvis_sway_in": return pelvisSwayIn
-        case "weight_lead_pct_est": return weightLeadPctEst
-        case "tempo_ratio": return tempoRatio
-        case "xfactor_deg": return xfactorDeg
-        case "lead_arm_bend_deg": return leadArmBendDeg
-        case "trail_knee_flex_loss_deg": return trailKneeFlexLossDeg
-        default: return nil
+        get {
+            switch key {
+            case "head_sway_in": return headSwayIn
+            case "head_rise_cm": return headRiseCm
+            case "spine_loss_deg": return spineLossDeg
+            case "pelvis_sway_in": return pelvisSwayIn
+            case "weight_lead_pct_est": return weightLeadPctEst
+            case "tempo_ratio": return tempoRatio
+            case "xfactor_deg": return xfactorDeg
+            case "lead_arm_bend_deg": return leadArmBendDeg
+            case "trail_knee_flex_loss_deg": return trailKneeFlexLossDeg
+            default: return nil
+            }
+        }
+        // Setter added for the [Faults synthetic] golden-check bracket, which constructs a
+        // SwingMetrics driven entirely by FaultEvaluator.benchmarks(category:)'s public key
+        // strings rather than hardcoding a field per metric.
+        set {
+            switch key {
+            case "head_sway_in": headSwayIn = newValue
+            case "head_rise_cm": headRiseCm = newValue
+            case "spine_loss_deg": spineLossDeg = newValue
+            case "pelvis_sway_in": pelvisSwayIn = newValue
+            case "weight_lead_pct_est": weightLeadPctEst = newValue
+            case "tempo_ratio": tempoRatio = newValue
+            case "xfactor_deg": xfactorDeg = newValue
+            case "lead_arm_bend_deg": leadArmBendDeg = newValue
+            case "trail_knee_flex_loss_deg": trailKneeFlexLossDeg = newValue
+            default: break
+            }
         }
     }
 }
