@@ -686,7 +686,8 @@ final class AppValidationTests: XCTestCase {
         let session = try SwingAnalyzer.analyzeSession(video: clip, club: i7, angle: .dtl, hand: .right, provider: replay)
         let swing = try XCTUnwrap(session.swings.first)
 
-        let snaps = await FrameExtractor.snapshots(videoURL: clip, session: session, swing: swing)
+        let cacheURL = FileManager.default.temporaryDirectory.appendingPathComponent("test-pose-cache-\(UUID().uuidString).json")
+        let snaps = await FrameExtractor.snapshots(videoURL: clip, cacheURL: cacheURL, session: session, swing: swing)
         XCTAssertFalse(snaps.isEmpty, "overlay snapshots build")
         XCTAssertGreaterThan(snaps[0].handPath.count, 1, "hand-path has points")
         XCTAssertNotNil(snaps[0].shaftPlane ?? snaps[0].lines["swingPlane"], "a plane line exists")
@@ -697,6 +698,26 @@ final class AppValidationTests: XCTestCase {
         XCTAssertEqual(plane.source, "hand")
         XCTAssertFalse(PlaneFormat.title(plane).isEmpty)
         XCTAssertTrue(PlaneFormat.detail(plane).contains("dev"))
+    }
+
+    /// Regression test for finding #13: a second call with the same cacheURL must be served from
+    /// the cache, not recomputed. Proven by pointing the second call's videoURL at a path that
+    /// doesn't exist — PoseEstimator.pose would throw unreadableVideo (nil result) if it were ever
+    /// actually invoked a second time, so a non-nil, identical-frame-count result proves the cache
+    /// was hit instead of the (nonexistent) video being re-read.
+    func testPoseCacheServesSecondCallWithoutRereadingVideo() async throws {
+        let clip = try sampleClip()
+        let cacheURL = FileManager.default.temporaryDirectory.appendingPathComponent("test-pose-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+        let firstResult = await PoseCache.devicePose(videoURL: clip, cacheURL: cacheURL)
+        let first = try XCTUnwrap(firstResult)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path), "cache file written after first call")
+
+        let bogus = URL(fileURLWithPath: "/nonexistent/\(UUID().uuidString).mov")
+        let secondResult = await PoseCache.devicePose(videoURL: bogus, cacheURL: cacheURL)
+        let second = try XCTUnwrap(secondResult, "second call should be served from cache despite a nonexistent video path")
+        XCTAssertEqual(second.frames.count, first.frames.count, "cached sequence matches the original")
     }
 
     /// C2 — ball anchor falls back to a tap when auto-detect returns nothing.

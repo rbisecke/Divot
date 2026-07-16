@@ -98,18 +98,28 @@ struct SideBySideView: View {
     }
 
     /// Overall shape match between the two swings (device-only: needs pose for both).
+    /// Not `Task.detached`: this view isn't @MainActor-isolated and none of
+    /// PoseCache/TemplateBuilder/PoseComparator are actor-isolated either, so detaching was never
+    /// actually necessary — it only meant this work didn't inherit the parent `.task`'s
+    /// cancellation, so backing out of the screen let it keep running to completion in the
+    /// background (finding #13's Task.detached cancellation fix, landed with its cache call-site
+    /// change since both touch these lines).
     private func computeMatch() async {
         guard let sA = a.session?.swings.first, let sB = b.session?.swings.first else { matchText = "n/a"; return }
         let urlA = a.videoURL, urlB = b.videoURL
+        let cacheA = a.poseCacheURL, cacheB = b.poseCacheURL
         let catA = a.club.category, angleA = a.angle, catB = b.club.category, angleB = b.angle
         let evA = sA.events, evB = sB.events
-        let result = await Task.detached { () -> Double? in
-            guard let poseA = try? PoseEstimator.pose(video: urlA), !poseA.frames.isEmpty,
-                  let poseB = try? PoseEstimator.pose(video: urlB), !poseB.frames.isEmpty else { return nil }
-            let tA = TemplateBuilder.build(poseA, events: evA, category: catA, angle: angleA)
-            let tB = TemplateBuilder.build(poseB, events: evB, category: catB, angle: angleB)
-            return PoseComparator.compare(user: tA, reference: tB, category: catA, angle: angleA).overall
-        }.value
-        matchText = result.map { "\(Int($0 * 100))%" } ?? "on-device only"
+        guard let poseA = await PoseCache.devicePose(videoURL: urlA, cacheURL: cacheA),
+              let poseB = await PoseCache.devicePose(videoURL: urlB, cacheURL: cacheB),
+              !Task.isCancelled else {
+            if !Task.isCancelled { matchText = "on-device only" }
+            return
+        }
+        let tA = TemplateBuilder.build(poseA, events: evA, category: catA, angle: angleA)
+        let tB = TemplateBuilder.build(poseB, events: evB, category: catB, angle: angleB)
+        let result = PoseComparator.compare(user: tA, reference: tB, category: catA, angle: angleA).overall
+        guard !Task.isCancelled else { return }
+        matchText = "\(Int(result * 100))%"
     }
 }

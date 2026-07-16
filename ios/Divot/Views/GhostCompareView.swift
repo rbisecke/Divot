@@ -74,7 +74,7 @@ struct GhostCompareView: View {
 
     private func load() async {
         guard let session = saved.session else { loading = false; return }
-        let snaps = await FrameExtractor.snapshots(videoURL: saved.videoURL, session: session, swing: swing)
+        let snaps = await FrameExtractor.snapshots(videoURL: saved.videoURL, cacheURL: saved.poseCacheURL, session: session, swing: swing)
         snapshots = snaps
         loading = false
     }

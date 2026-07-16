@@ -126,7 +126,8 @@ struct DTLPlaneView: View {
 
     private func load() async {
         loading = true
-        let snapshots = await FrameExtractor.snapshots(videoURL: saved.videoURL, session: saved.session ?? placeholder(),
+        let snapshots = await FrameExtractor.snapshots(videoURL: saved.videoURL, cacheURL: saved.poseCacheURL,
+                                                       session: saved.session ?? placeholder(),
                                                        swing: swing, ball: ballAnchor.ball)
         snaps = snapshots
         if ballAnchor.ball == nil, let b = snapshots.first?.ball { ballAnchor.setTap(b) }

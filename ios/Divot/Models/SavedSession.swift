@@ -53,6 +53,13 @@ final class SavedSession {
     var videoURL: URL {
         AppPaths.videosDir.appendingPathComponent(videoFilename)
     }
+
+    /// Where this session's cached PoseSequence (if any) lives on disk — see PoseCache.swift
+    /// (finding #13). The video file never changes in place once written, so no cache-key beyond
+    /// the filename is needed.
+    var poseCacheURL: URL {
+        AppPaths.poseCacheDir.appendingPathComponent(videoFilename).appendingPathExtension("pose.json")
+    }
 }
 
 enum AppPaths {
@@ -61,6 +68,14 @@ enum AppPaths {
     }
     static var videosDir: URL {
         let d = documents.appendingPathComponent("videos", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        return d
+    }
+    /// Cached PoseSequence JSON, one per saved video — avoids re-running the single most
+    /// expensive operation in the app (full frame decode + per-frame Vision) on every visit to a
+    /// review screen (finding #13).
+    static var poseCacheDir: URL {
+        let d = documents.appendingPathComponent("poseCache", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }

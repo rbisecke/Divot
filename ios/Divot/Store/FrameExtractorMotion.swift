@@ -6,8 +6,8 @@ import SwingCore
 extension FrameExtractor {
     struct Motion { let sequence: KinematicSequence; let headTravelCm: Double }
 
-    static func motion(videoURL: URL, swing: SwingAnalysis, angle: Angle, hand: Hand) async -> Motion? {
-        guard let pose = try? PoseEstimator.pose(video: videoURL), !pose.frames.isEmpty else { return nil }
+    static func motion(videoURL: URL, cacheURL: URL, swing: SwingAnalysis, angle: Angle, hand: Hand) async -> Motion? {
+        guard let pose = await PoseCache.devicePose(videoURL: videoURL, cacheURL: cacheURL) else { return nil }
         let seq = SequenceEngine.compute(pose, events: swing.events, hand: hand)
         let head = SwingLines.headTravelCm(pose, events: swing.events, angle: angle, hand: hand)
         return Motion(sequence: seq, headTravelCm: head)

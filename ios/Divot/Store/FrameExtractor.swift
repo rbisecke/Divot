@@ -52,10 +52,10 @@ enum FrameExtractor {
         return out
     }
 
-    static func snapshots(videoURL: URL, session: Session, swing: SwingAnalysis,
+    static func snapshots(videoURL: URL, cacheURL: URL, session: Session, swing: SwingAnalysis,
                           ball ballIn: CGPoint? = nil) async -> [PhaseSnapshot] {
         let angle = session.angle, club = session.club, hand = session.hand
-        guard let pose = try? PoseProviderFactory.make().pose(for: videoURL, fps: 30) else { return [] }
+        guard let pose = await PoseCache.pose(videoURL: videoURL, cacheURL: cacheURL, fps: 30) else { return [] }
         let ref = ReferenceStore.template(category: club.category, angle: angle)
         let gen = makeGenerator(videoURL)
 

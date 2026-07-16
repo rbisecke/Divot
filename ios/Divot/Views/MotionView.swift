@@ -67,7 +67,7 @@ struct MotionView: View {
     }
 
     private func load() async {
-        motion = await FrameExtractor.motion(videoURL: saved.videoURL, swing: swing, angle: saved.angle, hand: saved.hand)
+        motion = await FrameExtractor.motion(videoURL: saved.videoURL, cacheURL: saved.poseCacheURL, swing: swing, angle: saved.angle, hand: saved.hand)
         loading = false
     }
 }
