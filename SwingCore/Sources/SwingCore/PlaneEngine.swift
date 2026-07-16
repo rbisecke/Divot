@@ -34,7 +34,13 @@ public enum PlaneEngine {
         guard len > 1e-6, !path.isEmpty else {
             return PlaneAnalysis(plane: plane, overTheTop: false, maxAbovePlane: 0, source: src, downswingPath: path)
         }
-        let nx = -dy / len, ny = dx / len
+        // The fixed 90-degree rotation below assumes a right-handed swing's geometry. A lefty's
+        // swing (filmed from the same camera side) is the mirror image of a righty's — joint
+        // *selection* elsewhere in this file is already hand-aware, but this sign wasn't, so a
+        // genuine over-the-top move for a left-handed golfer was classified as shallow and vice
+        // versa (finding #7). Mirroring the normal's sign undoes exactly that reflection.
+        let mirror: Double = hand == .left ? -1 : 1
+        let nx = (-dy / len) * mirror, ny = (dx / len) * mirror
 
         // shoulder width (normalized) at address for scale
         let s = JointSeries(pose)

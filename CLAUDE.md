@@ -27,7 +27,7 @@ Not distributed on the App Store.
   the Simulator against `sample_swing.pose.json`.
 
 ## Build & validate
-- **Engine (T1, headless, no Xcode needed):** `make validate`  → expect `ALL PASS, 114 checks`
+- **Engine (T1, headless, no Xcode needed):** `make validate`  → expect `ALL PASS, 119 checks`
 - **Generate the Xcode project:** `make generate` (XcodeGen from `ios/project.yml`; the
   `.xcodeproj` is generated, not committed)
 - **App (T2, simulator):** `make test` → expect 62 unit (+4 device-skipped) + 2 UI, 0 failures

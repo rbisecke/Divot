@@ -472,6 +472,29 @@ check(inOrder.inSequence, "pelvis→torso→arm→hand ⇒ inSequence true")
 let reversed = SequenceEngine.compute(seqPose(pelvis: 8, torso: 6, arm: 4, hand: 2), events: seqEvents)
 check(!reversed.inSequence, "reversed order ⇒ inSequence false")
 
+// hand: .left was completely untested end to end before (compounding finding #7) — SequenceEngine
+// reads the *trail*-side arm/hand joints for a lefty (.rightElbow/.rightWrist), mirroring seqPose's
+// right-handed fixture onto the right side instead of the left.
+func seqPoseLeft(pelvis: Int, torso: Int, arm: Int, hand: Int) -> PoseSequence {
+    func off(_ i: Int, _ f: Int) -> Double { i >= f ? 0.10 : 0 }
+    var frames: [PoseFrame] = []
+    for i in 0..<10 {
+        func p(_ x: Double, _ y: Double) -> JointPoint { JointPoint(x: x, y: y, c: 1) }
+        let j: [Joint: JointPoint] = [
+            .leftHip: p(0.45, 0.50), .rightHip: p(0.55, 0.50 + off(i, pelvis)),
+            .leftShoulder: p(0.42, 0.68), .rightShoulder: p(0.58, 0.68 + off(i, torso)),
+            .rightElbow: p(0.60 + off(i, arm), 0.58),
+            .rightWrist: p(0.56 + off(i, arm) - off(i, hand), 0.50),
+        ]
+        frames.append(PoseFrame(t: Double(i) / 30.0, joints: j))
+    }
+    return PoseSequence(fps: 30, width: 1000, height: 1000, frames: frames)
+}
+let inOrderLeft = SequenceEngine.compute(seqPoseLeft(pelvis: 2, torso: 4, arm: 6, hand: 8), events: seqEvents, hand: .left)
+check(inOrderLeft.inSequence, "hand: .left pelvis→torso→arm→hand ⇒ inSequence true")
+let reversedLeft = SequenceEngine.compute(seqPoseLeft(pelvis: 8, torso: 6, arm: 4, hand: 2), events: seqEvents, hand: .left)
+check(!reversedLeft.inSequence, "hand: .left reversed order ⇒ inSequence false")
+
 // [P3.1] MLM2PRO CSV parser — golden check against a committed fixture.
 // validate.sh exports SWINGCORE_TEST_CSV at the repo's own ios/DivotTests/Fixtures/sample_shots.csv
 // by default, so this runs in CI/on a clean clone with no manual setup.
@@ -576,6 +599,31 @@ let over = PlaneEngine.analyze(cpPose(0.2), events: cpEvents, hand: .right, ball
 check(over.overTheTop, "C3 over-the-top synthetic ⇒ true (maxAbove \(over.maxAbovePlane))")
 let shallow = PlaneEngine.analyze(cpPose(0.6), events: cpEvents, hand: .right, ball: cpBall)
 check(!shallow.overTheTop, "C3 shallow synthetic ⇒ false (maxAbove \(shallow.maxAbovePlane))")
+
+// finding #7 — left-handed mirror of the same fixtures (x mirrored about 0.5, left/right joint
+// roles swapped so the lead wrist lands on .rightWrist, matching Hand.leadWrist for .left).
+// Without the sign fix, a genuine over-the-top move gets classified as shallow and vice versa.
+func cpFrameL(_ t: Double, _ wristX: Double, _ wristY: Double) -> PoseFrame {
+    PoseFrame(t: t, joints: [
+        .rightWrist: JointPoint(x: 1 - wristX, y: wristY, c: 1),
+        .rightShoulder: JointPoint(x: 1 - 0.6, y: 0.7, c: 1), .leftShoulder: JointPoint(x: 1 - 0.4, y: 0.7, c: 1),
+        .rightHip: JointPoint(x: 1 - 0.55, y: 0.5, c: 1), .leftHip: JointPoint(x: 1 - 0.45, y: 0.5, c: 1),
+    ])
+}
+func cpPoseL(_ overX: Double) -> PoseSequence {
+    var frames = [cpFrameL(0, 0.5, 0.6)]
+    for i in 1...5 { frames.append(cpFrameL(Double(i) / 30, overX, 0.5)) }
+    return PoseSequence(fps: 30, width: 1000, height: 1000, frames: frames)
+}
+let cpBallL = CGPoint(x: 1 - Double(cpBall.x), y: cpBall.y)
+let overL = PlaneEngine.analyze(cpPoseL(0.2), events: cpEvents, hand: .left, ball: cpBallL)
+check(overL.overTheTop, "C3 left-handed mirror of over-the-top synthetic ⇒ true (maxAbove \(overL.maxAbovePlane))")
+let shallowL = PlaneEngine.analyze(cpPoseL(0.6), events: cpEvents, hand: .left, ball: cpBallL)
+check(!shallowL.overTheTop, "C3 left-handed mirror of shallow synthetic ⇒ false (maxAbove \(shallowL.maxAbovePlane))")
+// The right-handed fixtures above must be completely unaffected by the hand-aware sign (a
+// regression here would mean the mirror term leaked into the .right path).
+check(over.maxAbovePlane == PlaneEngine.analyze(cpPose(0.2), events: cpEvents, hand: .right, ball: cpBall).maxAbovePlane,
+      "C3 right-handed maxAbovePlane unchanged by the hand-aware sign fix")
 if let poseJSON, FileManager.default.fileExists(atPath: poseJSON), let rp = try? ReplayPoseProvider(contentsOf: URL(fileURLWithPath: poseJSON)) {
     let pa = PlaneEngine.analyze(rp.sequence, events: EventDetector.detect(rp.sequence), angle: .faceOn, hand: .right, ball: nil)
     check(pa.maxAbovePlane.isFinite && pa.source == "hand", "C3 replay plane finite, source hand")
