@@ -503,6 +503,17 @@ let rm = Trends.rollingMean(ser, window: 2)
 check(abs((rm.last?.value ?? 0) - 4.0) < 1e-9, "rolling mean of [5,3] w2 last == 4.0")
 check(Trends.series(sess, metric: "head_sway_in", clubID: nil).count == 3, "no id filter → all 3 sessions")
 check(Trends.series(sess, metric: "head_sway_in", category: .wedge).count == 2, "category filter → 2 wedge sessions")
+// Test-coverage gap: a NaN metric value must be filtered out of the series, not passed through
+// as a garbage point.
+let sessWithNaN = sess + [mkSession(4, trendPW, .nan)]
+let serWithNaN = Trends.series(sessWithNaN, metric: "head_sway_in", clubID: trendPW.id)
+check(serWithNaN.count == 2 && serWithNaN.allSatisfy { $0.value.isFinite }, "NaN metric value filtered out of the series (got \(serWithNaN.count) points)")
+// Test-coverage gap: rollingMean's window must clamp to >= 1, not crash on 0 or negative.
+let rmZero = Trends.rollingMean(ser, window: 0)
+check(rmZero.count == ser.count && rmZero.allSatisfy { $0.value.isFinite }, "rollingMean(window: 0) clamps to 1, no crash")
+let rmNegative = Trends.rollingMean(ser, window: -5)
+check(rmNegative.count == ser.count && rmNegative.allSatisfy { $0.value.isFinite }, "rollingMean(window: -5) clamps to 1, no crash")
+check(rmZero.map(\.value) == rmNegative.map(\.value), "window 0 and negative window clamp identically")
 
 // [P1.8] ReportBuilder — deterministic Markdown summary.
 print("[Report]")
@@ -517,6 +528,12 @@ let md = ReportBuilder.markdown(rsession)
 check(md.contains("PW"), "report contains club displayName")
 check(!rfaults.isEmpty && md.contains(rfaults[0].code), "report contains top fault code (\(rfaults.first?.code ?? "none"))")
 check(md.contains("3.0 : 1"), "report contains tempo value")
+// Test-coverage gap: an empty swings array still renders the header/club line and the explicit
+// no-swing-detected fallback text, not a crash from bestSwing()'s empty-collection .min().
+let noSwingSession = Session(date: Date(timeIntervalSince1970: 0), club: pwSpec, angle: .faceOn, hand: .right,
+                             swings: [], stats: nil)
+let noSwingMd = ReportBuilder.markdown(noSwingSession)
+check(noSwingMd.contains("PW") && noSwingMd.contains("No swing detected."), "no-swing session still renders header + fallback text")
 
 // [P2.1] FramingGuide — pure, no clip needed.
 print("[FramingGuide]")
@@ -534,6 +551,21 @@ var noAnkle = fullBody(); noAnkle[.leftAnkle] = nil
 check(!FramingGuide.inFrame(noAnkle).ok, "missing ankle ⇒ not ok")
 var edge = fullBody(); edge[.rightShoulder] = JointPoint(x: 0.995, y: 0.75, c: 1)
 check(!FramingGuide.inFrame(edge).ok, "joint at edge ⇒ not ok")
+// Test-coverage gap: extent-ratio bounds (head-to-ankle span relative to frame) and the no-head
+// branch. fullBody()'s own extent is nose.y(0.90) - ankleY(0.15) = 0.75, comfortably mid-range.
+func withExtent(_ extent: Double) -> [Joint: JointPoint] {
+    var j = fullBody()
+    j[.nose] = JointPoint(x: 0.5, y: 0.15 + extent, c: 1)   // ankles stay at y=0.15
+    return j
+}
+check(FramingGuide.inFrame(withExtent(0.30)).reason == "Step closer — you're too small in frame",
+      "extent 0.30 (< 0.45) ⇒ the specific too-small message")
+check(FramingGuide.inFrame(withExtent(0.98)).reason == "Step back — you're too close",
+      "extent 0.98 (> 0.97) ⇒ the specific too-close message")
+check(FramingGuide.inFrame(withExtent(0.70)).ok, "extent 0.70 (mid-range) ⇒ ok")
+var noHead = fullBody(); noHead[.nose] = nil; noHead[.leftEar] = nil; noHead[.rightEar] = nil
+let noHeadResult = FramingGuide.inFrame(noHead)
+check(!noHeadResult.ok && noHeadResult.reason == "Get your head in frame", "no nose/ear at all ⇒ the specific no-head message")
 
 // [C6] dtlInFrame — side-on detection.
 func sideOn() -> [Joint: JointPoint] {
