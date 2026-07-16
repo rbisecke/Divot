@@ -31,11 +31,17 @@ final class AccessibilityAuditTests: XCTestCase {
             }
         }
 
-        sleep(2)
+        UITestWait.navigationTitle(app, "Analyze")
         try audit()
         for tab in ["History", "Trends", "Compare", "Settings"] {
             app.tabBars.buttons[tab].tap()
-            sleep(2)
+            switch tab {
+            case "History": UITestWait.historyRows(app)
+            // "Metric" only renders once Trends' real content is ready (validated: a nav-title-only
+            // wait doesn't actually wait for anything, since the title renders before any data does).
+            case "Trends": UITestWait.element(app.staticTexts["Metric"])
+            default: UITestWait.navigationTitle(app, tab)
+            }
             try audit()
         }
 
@@ -43,7 +49,7 @@ final class AccessibilityAuditTests: XCTestCase {
         let myBag = app.descendants(matching: .any)["myBagLink"]
         if myBag.waitForExistence(timeout: 5) {
             myBag.tap()
-            sleep(2)
+            UITestWait.navigationTitle(app, "My Bag")
             try audit()
         }
 
