@@ -2,6 +2,9 @@
 import Foundation
 import CoreHaptics
 import SwingCore
+import os.log
+
+private let hapticsLog = Logger(subsystem: "com.rboyarov91.divot", category: "haptics")
 
 /// P2.5 — play the measured tempo back as two haptic beats (top + impact).
 /// Pure timing comes from the engine (HapticBeats); firing is device-only (Simulator has no haptics).
@@ -31,7 +34,10 @@ final class HapticsPlayer {
             let player = try engine?.makePlayer(with: pattern)
             try player?.start(atTime: 0)
         } catch {
-            // Haptics are a non-critical enhancement; ignore failures.
+            // Haptics are a non-critical enhancement — a failure here shouldn't surface to the
+            // user, but silently swallowing it made a bad engine/pattern state invisible even
+            // during debugging (finding Low). Log, don't propagate.
+            hapticsLog.error("haptics playback failed: \(error.localizedDescription, privacy: .public)")
         }
     }
 }
