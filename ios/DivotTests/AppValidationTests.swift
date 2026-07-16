@@ -745,6 +745,19 @@ final class AppValidationTests: XCTestCase {
         XCTAssertEqual(CaptureController.nextPosition(.front), .back)
     }
 
+    /// Regression coverage for finding #5: live pose tracking hardcoded `.up` regardless of the
+    /// connection's actual rotation/mirroring, which is wrong in the normal (portrait) case.
+    func testVisionOrientationAccountsForRotationAndMirroring() {
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 90, position: .back), .right)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 90, position: .front), .leftMirrored)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 270, position: .back), .left)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 270, position: .front), .rightMirrored)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 0, position: .back), .up)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 0, position: .front), .upMirrored)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 180, position: .back), .down)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 180, position: .front), .downMirrored)
+    }
+
     // MARK: Wave 2 (branding cohesion + data-UX)
 
     func testDataVizCodingRoles() {

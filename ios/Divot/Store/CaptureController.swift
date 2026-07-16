@@ -32,6 +32,21 @@ final class CaptureController: NSObject, ObservableObject,
         p == .back ? .front : .back
     }
 
+    /// Derive the correct Vision request orientation from the capture connection's actual
+    /// rotation angle and camera position (front camera delivers mirrored buffers), instead of
+    /// assuming `.up` for every frame regardless of how the phone is actually held (finding #5).
+    /// Pure/testable; uses the modern (iOS 17+) `videoRotationAngle`, not the deprecated
+    /// `videoOrientation`.
+    static func visionOrientation(rotationAngle: CGFloat, position: AVCaptureDevice.Position) -> CGImagePropertyOrientation {
+        let mirrored = position == .front
+        switch rotationAngle {
+        case 90:  return mirrored ? .leftMirrored  : .right
+        case 270: return mirrored ? .rightMirrored : .left
+        case 0:   return mirrored ? .upMirrored    : .up
+        default:  return mirrored ? .downMirrored  : .down   // 180
+        }
+    }
+
     let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "capture.session")
     private let frameQueue = DispatchQueue(label: "capture.frames")
@@ -143,7 +158,8 @@ final class CaptureController: NSObject, ObservableObject,
                        from connection: AVCaptureConnection) {
         frameCounter += 1
         guard frameCounter % 3 == 0 else { return }   // throttle pose to ~every 3rd frame
-        let handler = VNImageRequestHandler(cmSampleBuffer: sampleBuffer, orientation: .up, options: [:])
+        let orientation = Self.visionOrientation(rotationAngle: connection.videoRotationAngle, position: currentPosition)
+        let handler = VNImageRequestHandler(cmSampleBuffer: sampleBuffer, orientation: orientation, options: [:])
         let req = VNDetectHumanBodyPoseRequest()
         try? handler.perform([req])
         guard let obs = req.results?.first as? VNHumanBodyPoseObservation,
