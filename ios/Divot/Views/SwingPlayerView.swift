@@ -119,15 +119,35 @@ struct SwingPlayerView: View {
                 model.setRate(0)
                 model.seek(toFraction: min(1, max(0, g.location.x / w)))
             })
+            // The hand-built Capsule/DragGesture scrubber had no accessibility element at all, so
+            // a VoiceOver user couldn't scrub playback by any means (finding #14). A swipe
+            // up/down while focused stands in for the drag gesture.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Playback position")
+            .accessibilityValue(Text(String(format: "%.1f seconds", model.current)))
+            .accessibilityAdjustableAction { direction in
+                let step = model.duration > 0 ? model.duration * 0.02 : 0.1
+                switch direction {
+                case .increment: model.seek(to: min(model.duration, model.current + step))
+                case .decrement: model.seek(to: max(0, model.current - step))
+                @unknown default: break
+                }
+            }
         }
         .frame(height: 22)
     }
 
     private var controls: some View {
         HStack(spacing: 16) {
-            Button { model.step(-1) } label: { Image(systemName: "backward.frame.fill") }
-            Button { model.playPause() } label: { Image(systemName: model.rate == 0 ? "play.fill" : "pause.fill") }
-            Button { model.step(1) } label: { Image(systemName: "forward.frame.fill") }
+            // Icon-only SF Symbol buttons default to a tap target under the 44pt accessibility
+            // minimum; frame(minWidth:minHeight:) on the label enlarges the hit region without
+            // changing the visible glyph size.
+            Button { model.step(-1) } label: { Image(systemName: "backward.frame.fill").frame(minWidth: 44, minHeight: 44) }
+                .accessibilityLabel("Previous frame")
+            Button { model.playPause() } label: { Image(systemName: model.rate == 0 ? "play.fill" : "pause.fill").frame(minWidth: 44, minHeight: 44) }
+                .accessibilityLabel(model.rate == 0 ? "Play" : "Pause")
+            Button { model.step(1) } label: { Image(systemName: "forward.frame.fill").frame(minWidth: 44, minHeight: 44) }
+                .accessibilityLabel("Next frame")
             Spacer()
             ForEach(rates, id: \.self) { r in
                 Button { model.setRate(r) } label: {
@@ -136,6 +156,11 @@ struct SwingPlayerView: View {
                         .background(model.rate == r ? Color.accentColor : Color.gray.opacity(0.2), in: Capsule())
                         .foregroundStyle(model.rate == r ? .white : .primary)
                 }
+                // Rate chips conveyed the active speed by color alone; VoiceOver announced the
+                // same label regardless of which was selected (finding #14, same root cause as
+                // the Medium-tier "toggle chips convey state by color only" item).
+                .accessibilityLabel("\(rateLabel(r)) speed")
+                .accessibilityAddTraits(model.rate == r ? .isSelected : [])
             }
         }
         .font(.title3)

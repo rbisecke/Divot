@@ -149,8 +149,15 @@ struct ResultsView: View {
                 Text("Tempo").font(.headline); Spacer()
                 Text(TempoFormat.ratioText(swing.metrics.tempoRatio)).font(.title3).bold()
                 Button { haptics.play(offsets: TempoHaptics.beats(for: swing)) } label: {
-                    Image(systemName: "hand.tap")
-                }.buttonStyle(.borderless).help("Feel the tempo")
+                    Image(systemName: "hand.tap").frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .help("Feel the tempo")
+                // .help() alone doesn't reliably surface as the VoiceOver label — the raw SF
+                // Symbol name ("hand.tap") isn't human-readable, and the icon-only tap target was
+                // also under the 44pt minimum (both surfaced once the a11y audit's navigation
+                // reached this screen for finding #14).
+                .accessibilityLabel("Feel the tempo")
             }
             GeometryReader { geo in
                 HStack(spacing: 2) {
@@ -181,6 +188,11 @@ struct ResultsView: View {
                                 .frame(height: 120).clipShape(RoundedRectangle(cornerRadius: 8))
                             Text(still.phase.rawValue.capitalized).font(.caption2).foregroundStyle(.secondary)
                         }
+                        // The still image had no accessibility label at all (VoiceOver announced
+                        // a bare "Image"). Combining with the phase caption below it gives the
+                        // photo a real label ("Address", "Top", etc.) instead of adding a
+                        // redundant one by hand.
+                        .accessibilityElement(children: .combine)
                     }
                 }
             }
@@ -231,6 +243,11 @@ struct ResultsView: View {
                                 ProgressView(value: m).tint(matchColor(m))
                                 Text("\(Int(m * 100))%").font(.caption).monospacedDigit()
                             }
+                            // A bare ProgressView's own hit region is just its thin bar (well
+                            // under the 44pt minimum). Combining the row into one accessibility
+                            // element gives VoiceOver a single, correctly-sized element with a
+                            // sensible combined label/value instead of three separate ones.
+                            .accessibilityElement(children: .combine)
                         }
                     }
                 }
