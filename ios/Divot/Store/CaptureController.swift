@@ -21,6 +21,10 @@ final class CaptureController: NSObject, ObservableObject,
     /// Write-only-from-sessionQueue mirror of `currentPosition`, for UI display only — logic never
     /// reads this back (finding #9: cross-thread reads of capture state were a data race).
     @Published var cameraPosition: AVCaptureDevice.Position = .back
+    /// Set when switchCamera() fails to add both the target camera and the fallback (previous)
+    /// camera — previously the preview just went black/frozen with no error surfaced, while
+    /// `cameraPosition` kept reporting the old (no-longer-active) position (Medium finding).
+    @Published var cameraUnavailable = false
 
     /// Pure guide selector (testable): DTL uses the side-on check, otherwise the face-on check.
     static func framing(_ joints: [SwingCore.Joint: JointPoint], dtl: Bool) -> (ok: Bool, reason: String) {
@@ -65,6 +69,7 @@ final class CaptureController: NSObject, ObservableObject,
     // which always runs serially on that queue).
     private var trigger = LiveSwingTrigger()
     private var frameCounter = 0
+    private var visionBusy = false
     // Set by stop() when a recording is torn down before it settled/finished naturally (finding #4);
     // consulted in the fileOutput delegate callback to discard the half-finalized clip.
     private var pendingTeardown = false
@@ -125,11 +130,19 @@ final class CaptureController: NSObject, ObservableObject,
             let target = Self.nextPosition(self.currentPosition)
             self.session.beginConfiguration()
             if let cur = self.currentInput { self.session.removeInput(cur); self.currentInput = nil }
-            let position = self.addCameraInput(position: target) ? target
-                : (self.addCameraInput(position: self.currentPosition) ? self.currentPosition : self.currentPosition)
+            let addedTarget = self.addCameraInput(position: target)
+            let addedFallback = addedTarget ? true : self.addCameraInput(position: self.currentPosition)
+            let position = addedTarget ? target : self.currentPosition
             self.session.commitConfiguration()
             self.currentPosition = position
-            DispatchQueue.main.async { self.cameraPosition = position }
+            // Both the target camera and falling back to the previous one failed to add — the
+            // preview would otherwise just go black/frozen with cameraPosition still silently
+            // reporting the (no-longer-active) old value (Medium finding).
+            let unavailable = !addedFallback
+            DispatchQueue.main.async {
+                self.cameraPosition = position
+                self.cameraUnavailable = unavailable
+            }
         }
     }
 
@@ -157,7 +170,13 @@ final class CaptureController: NSObject, ObservableObject,
     func captureOutput(_ output: AVCaptureOutput, didOutput sampleBuffer: CMSampleBuffer,
                        from connection: AVCaptureConnection) {
         frameCounter += 1
-        guard frameCounter % 3 == 0 else { return }   // throttle pose to ~every 3rd frame
+        // In-flight guard (Medium finding): a fresh VNImageRequestHandler/request/dictionary is
+        // otherwise built every 3rd frame, up to ~80x/sec at 240fps -- safe without atomics since
+        // captureOutput already runs synchronously to completion on capture.frames before the next
+        // callback fires, but this keeps the pose work from ever backing up if that assumption
+        // changes (e.g. a future async restructuring).
+        guard frameCounter % 3 == 0, !visionBusy else { return }
+        visionBusy = true; defer { visionBusy = false }
         let orientation = Self.visionOrientation(rotationAngle: connection.videoRotationAngle, position: currentPosition)
         let handler = VNImageRequestHandler(cmSampleBuffer: sampleBuffer, orientation: orientation, options: [:])
         let req = VNDetectHumanBodyPoseRequest()
