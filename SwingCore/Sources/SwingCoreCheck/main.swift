@@ -673,6 +673,22 @@ if let imgL = circleImage(0.25, 0.5, 8), let d = BallDetector.detectAtAddress(im
 }
 if let blank = circleImage(0.5, 0.5, 0) { check(BallDetector.detectAtAddress(image: blank) == nil, "C2 blank image ⇒ nil") }
 
+// Medium finding — footRegion now crops before allocating/drawing, instead of always scanning
+// the full-resolution buffer. Two checks: (a) a region that legitimately contains the ball still
+// finds it, with the crop-local centroid correctly mapped back to full-image-normalized
+// coordinates; (b) a region that does NOT contain the ball finds nothing, proving the crop
+// actually restricts the scan rather than being a no-op.
+if let imgRegion = circleImage(0.3, 0.6, 8) {
+    let containingRegion = CGRect(x: 0.1, y: 0.4, width: 0.4, height: 0.4)
+    if let d = BallDetector.detectAtAddress(image: imgRegion, footRegion: containingRegion) {
+        check(abs(Double(d.point.x) - 0.3) < 0.05 && abs(Double(d.point.y) - 0.6) < 0.05,
+              "C2 footRegion crop maps centroid back to full-image coords (\(d.point))")
+    } else { check(false, "C2 ball inside footRegion should be found") }
+    let excludingRegion = CGRect(x: 0.6, y: 0.0, width: 0.35, height: 0.35)
+    check(BallDetector.detectAtAddress(image: imgRegion, footRegion: excludingRegion) == nil,
+          "C2 footRegion excluding the ball ⇒ nil (crop actually restricts the scan)")
+}
+
 let over = PlaneEngine.analyze(cpPose(0.2), events: cpEvents, hand: .right, ball: cpBall)
 check(over.overTheTop, "C3 over-the-top synthetic ⇒ true (maxAbove \(over.maxAbovePlane))")
 let shallow = PlaneEngine.analyze(cpPose(0.6), events: cpEvents, hand: .right, ball: cpBall)

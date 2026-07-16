@@ -66,10 +66,14 @@ enum FrameExtractor {
                                              (.impact, swing.events.impact), (.finish, swing.events.finish)]
 
         // Ball anchor: use the passed-in / persisted ball, else auto-detect on the address frame (C2).
+        // Derives a real search region from the address-frame ankles instead of always scanning
+        // the full-resolution frame (Medium finding: ~33MB transient allocation on a 4K frame,
+        // repeated on every load and re-anchor tap).
         var ball = ballIn ?? swing.ball
         if ball == nil,
            let addrCG = try? gen.copyCGImage(at: CMTime(seconds: swing.events.address.t, preferredTimescale: 600), actualTime: nil) {
-            ball = BallDetector.detectAtAddress(image: addrCG, footRegion: nil)?.point
+            let addressFrame = nearestFrame(pose, t: swing.events.address.t)
+            ball = BallDetector.detectAtAddress(image: addrCG, footRegion: ballSearchRegion(addressFrame))?.point
         }
         let targetLine = ball.map { SwingLines.targetLine(ball: $0, angle: angle) }
         let shaftPlane = SwingLines.shaftPlane(pose, events: swing.events, hand: hand, ball: ball)
@@ -110,5 +114,19 @@ enum FrameExtractor {
         var bv = Double.infinity
         for f in pose.frames { let d = abs(f.t - t); if d < bv { bv = d; best = f } }
         return best
+    }
+
+    /// A search region around the golfer's feet, derived from the address-frame ankles, so
+    /// BallDetector.detectAtAddress only needs to scan (and crop to) that area instead of the
+    /// full-resolution frame. Non-private so it's independently testable. Returns nil when no
+    /// ankle was detected that frame (BallDetector then falls back to a full-frame scan).
+    static func ballSearchRegion(_ frame: PoseFrame) -> CGRect? {
+        let ankles = [frame.joints[.leftAnkle], frame.joints[.rightAnkle]].compactMap { $0 }
+        guard !ankles.isEmpty else { return nil }
+        let midX = ankles.map(\.x).reduce(0, +) / Double(ankles.count)
+        let footY = ankles.map { 1 - $0.y }.max() ?? 0.9   // Vision is bottom-left; flip to top-left
+        let x0 = max(0, midX - 0.3), x1 = min(1, midX + 0.3)
+        let y0 = max(0, footY - 0.05), y1 = min(1, footY + 0.25)
+        return CGRect(x: x0, y: y0, width: x1 - x0, height: y1 - y0)
     }
 }

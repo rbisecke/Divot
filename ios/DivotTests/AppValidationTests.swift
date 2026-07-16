@@ -728,6 +728,23 @@ final class AppValidationTests: XCTestCase {
         XCTAssertEqual(second.frames.count, first.frames.count, "cached sequence matches the original")
     }
 
+    /// Regression coverage for the BallDetector/FrameExtractor footRegion crop optimization
+    /// (Medium finding): ballSearchRegion derives a bounded search rect from the address-frame
+    /// ankles instead of always scanning the full-resolution frame.
+    func testBallSearchRegionBoundsFromAnkles() throws {
+        let frame = PoseFrame(t: 0, joints: [
+            .leftAnkle: JointPoint(x: 0.45, y: 0.05, c: 1), .rightAnkle: JointPoint(x: 0.55, y: 0.08, c: 1),
+        ])
+        let r = try XCTUnwrap(FrameExtractor.ballSearchRegion(frame))
+        XCTAssertTrue(r.width > 0 && r.height > 0, "sane bounded rect")
+        XCTAssertTrue(r.minX >= 0 && r.maxX <= 1 && r.minY >= 0 && r.maxY <= 1, "clamped to [0,1]")
+    }
+
+    func testBallSearchRegionNilWithoutAnkles() {
+        let frame = PoseFrame(t: 0, joints: [.leftShoulder: JointPoint(x: 0.5, y: 0.7, c: 1)])
+        XCTAssertNil(FrameExtractor.ballSearchRegion(frame))
+    }
+
     /// C2 — ball anchor falls back to a tap when auto-detect returns nothing.
     @MainActor func testBallTapFallbackSetsAnchor() {
         let m = BallAnchorModel(detected: nil)
