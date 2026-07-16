@@ -28,3 +28,53 @@ public enum MotionTrigger {
         return (Swift.max(0, start - pre), Swift.min(n - 1, end + post))
     }
 }
+
+/// Streaming counterpart to `swingWindow`: consumes one lead-wrist-Y sample per camera frame and
+/// decides start/stop, instead of `swingWindow`'s one-shot batch analysis over an already-recorded
+/// series. Pure so the live capture controller's decision logic is testable without AVFoundation/Vision.
+public struct LiveSwingTrigger: Sendable {
+    public private(set) var recentY: [Double] = []
+    public private(set) var isRecording = false
+    public private(set) var settleCounter = 0
+    private var missingSampleRun = 0
+
+    public var windowSize = 12
+    public var minSamples = 6
+    public var startSpan = 0.20
+    public var settleSpan = 0.03
+    public var settleFrames = 15
+    /// Safety valve: force-stop if wrist tracking drops out mid-recording (e.g. motion blur through
+    /// the downswing) for this many consecutive samples, regardless of whether span ever settles.
+    public var maxMissingFrames = 45
+
+    public enum Action { case none, start, stop }
+
+    public init() {}
+
+    public mutating func step(y: Double?, framingOK: Bool) -> Action {
+        guard let y else {
+            missingSampleRun += 1
+            if isRecording, missingSampleRun > maxMissingFrames {
+                isRecording = false; settleCounter = 0; missingSampleRun = 0
+                return .stop
+            }
+            return .none
+        }
+        missingSampleRun = 0
+        recentY.append(y); if recentY.count > windowSize { recentY.removeFirst() }
+        guard recentY.count >= minSamples else { return .none }
+        let span = (recentY.max() ?? 0) - (recentY.min() ?? 0)
+        if !isRecording, framingOK, span > startSpan {
+            isRecording = true
+            return .start
+        }
+        if isRecording {
+            settleCounter = span < settleSpan ? settleCounter + 1 : 0
+            if settleCounter > settleFrames {
+                isRecording = false; settleCounter = 0
+                return .stop
+            }
+        }
+        return .none
+    }
+}

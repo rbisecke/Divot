@@ -15,7 +15,11 @@ final class CaptureController: NSObject, ObservableObject,
     @Published var permissionDenied = false
     @Published var highFps = false
     @Published var lastClipURL: URL?
-    @Published var dtlMode = false   // false = face-on guide, true = down-the-line (side-on) guide
+    /// UI-owned (set by the DTL/face-on Picker) — main is the source of truth; mirrored to
+    /// `dtlModeSnapshot` for the capture.frames queue via `didSet` (finding #9).
+    @Published var dtlMode = false { didSet { frameQueue.async { self.dtlModeSnapshot = self.dtlMode } } }
+    /// Write-only-from-sessionQueue mirror of `currentPosition`, for UI display only — logic never
+    /// reads this back (finding #9: cross-thread reads of capture state were a data race).
     @Published var cameraPosition: AVCaptureDevice.Position = .back
 
     /// Pure guide selector (testable): DTL uses the side-on check, otherwise the face-on check.
@@ -30,15 +34,25 @@ final class CaptureController: NSObject, ObservableObject,
 
     let session = AVCaptureSession()
     private let sessionQueue = DispatchQueue(label: "capture.session")
+    private let frameQueue = DispatchQueue(label: "capture.frames")
     private let videoOutput = AVCaptureVideoDataOutput()
     private let movieOutput = AVCaptureMovieFileOutput()
     private var currentInput: AVCaptureDeviceInput?
     private var configured = false
 
-    // motion auto-record state (lead-wrist vertical position over recent frames)
-    private var recentWristY: [Double] = []
+    // sessionQueue-confined source of truth for the active camera (finding #9); `cameraPosition`
+    // above is a UI-facing mirror only.
+    private var currentPosition: AVCaptureDevice.Position = .back
+    // capture.frames-confined mirror of `dtlMode` (finding #9).
+    private var dtlModeSnapshot = false
+
+    // motion auto-record state — confined to capture.frames (only ever touched from captureOutput,
+    // which always runs serially on that queue).
+    private var trigger = LiveSwingTrigger()
     private var frameCounter = 0
-    private var settleCounter = 0
+    // Set by stop() when a recording is torn down before it settled/finished naturally (finding #4);
+    // consulted in the fileOutput delegate callback to discard the half-finalized clip.
+    private var pendingTeardown = false
 
     func requestAndConfigure() {
         AVCaptureDevice.requestAccess(for: .video) { [weak self] granted in
@@ -52,10 +66,10 @@ final class CaptureController: NSObject, ObservableObject,
         guard !configured else { return }
         session.beginConfiguration()
         session.sessionPreset = .high
-        guard addCameraInput(position: cameraPosition) else {
+        guard addCameraInput(position: currentPosition) else {
             session.commitConfiguration(); return
         }
-        videoOutput.setSampleBufferDelegate(self, queue: DispatchQueue(label: "capture.frames"))
+        videoOutput.setSampleBufferDelegate(self, queue: frameQueue)
         if session.canAddOutput(videoOutput) { session.addOutput(videoOutput) }
         if session.canAddOutput(movieOutput) { session.addOutput(movieOutput) }
         session.commitConfiguration()
@@ -93,12 +107,13 @@ final class CaptureController: NSObject, ObservableObject,
     func switchCamera() {
         sessionQueue.async {
             guard self.configured, !self.movieOutput.isRecording else { return }
-            let target = Self.nextPosition(self.cameraPosition)
+            let target = Self.nextPosition(self.currentPosition)
             self.session.beginConfiguration()
             if let cur = self.currentInput { self.session.removeInput(cur); self.currentInput = nil }
             let position = self.addCameraInput(position: target) ? target
-                : (self.addCameraInput(position: self.cameraPosition) ? self.cameraPosition : self.cameraPosition)
+                : (self.addCameraInput(position: self.currentPosition) ? self.currentPosition : self.currentPosition)
             self.session.commitConfiguration()
+            self.currentPosition = position
             DispatchQueue.main.async { self.cameraPosition = position }
         }
     }
@@ -107,7 +122,20 @@ final class CaptureController: NSObject, ObservableObject,
         f.videoSupportedFrameRateRanges.map(\.maxFrameRate).max() ?? 0
     }
 
-    func stop() { sessionQueue.async { if self.session.isRunning { self.session.stopRunning() } } }
+    /// Tear down the session. If a recording is in flight (e.g. the user backed out of a stuck
+    /// auto-stop), finalize the movie file properly first instead of yanking the session out from
+    /// under it (finding #4) — `fileOutput(_:didFinishRecordingTo:...)` completes the teardown and
+    /// discards the half-finalized clip once `stopRecording()`'s completion callback fires.
+    func stop() {
+        sessionQueue.async {
+            if self.movieOutput.isRecording {
+                self.pendingTeardown = true
+                self.movieOutput.stopRecording()
+            } else if self.session.isRunning {
+                self.session.stopRunning()
+            }
+        }
+    }
 
     // MARK: live pose → framing guide + motion auto-record
 
@@ -119,47 +147,59 @@ final class CaptureController: NSObject, ObservableObject,
         let req = VNDetectHumanBodyPoseRequest()
         try? handler.perform([req])
         guard let obs = req.results?.first as? VNHumanBodyPoseObservation,
-              let pts = try? obs.recognizedPoints(.all) else { return }
+              let pts = try? obs.recognizedPoints(.all) else {
+            // No body detected at all this sample (not just a low-confidence wrist) — still feed
+            // the trigger a missing sample so a sustained total-tracking loss can still force a
+            // stop via `maxMissingFrames`, same as a low-confidence wrist (finding #3).
+            DispatchQueue.main.async { self.framingOK = false }
+            detectMotion(leadWristY: nil, framingOK: false)
+            return
+        }
         var joints: [SwingCore.Joint: JointPoint] = [:]
         for (vn, j) in Self.jointMap {
             if let p = pts[vn], p.confidence >= 0.15 {
                 joints[j] = JointPoint(x: Double(p.location.x), y: Double(p.location.y), c: Double(p.confidence))
             }
         }
-        let guide = Self.framing(joints, dtl: dtlMode)
+        let guide = Self.framing(joints, dtl: dtlModeSnapshot)
         let leadY = joints[.leftWrist]?.y
         DispatchQueue.main.async { self.framingOK = guide.ok; self.framingReason = guide.reason }
         detectMotion(leadWristY: leadY, framingOK: guide.ok)
     }
 
     private func detectMotion(leadWristY: Double?, framingOK: Bool) {
-        guard let y = leadWristY else { return }
-        recentWristY.append(y); if recentWristY.count > 12 { recentWristY.removeFirst() }
-        guard recentWristY.count >= 6 else { return }
-        let span = (recentWristY.max() ?? 0) - (recentWristY.min() ?? 0)
-        if !isRecording, framingOK, span > 0.20 {           // a swing started
-            beginRecording()
-        } else if isRecording {
-            if span < 0.03 { settleCounter += 1 } else { settleCounter = 0 }
-            if settleCounter > 15 { endRecording() }         // motion settled → stop
+        switch trigger.step(y: leadWristY, framingOK: framingOK) {
+        case .start: beginRecording()
+        case .stop: endRecording()
+        case .none: break
         }
     }
 
     private func beginRecording() {
-        guard !movieOutput.isRecording else { return }
         let url = FileManager.default.temporaryDirectory.appendingPathComponent("cap-\(UUID().uuidString).mov")
         DispatchQueue.main.async { self.isRecording = true }
-        movieOutput.startRecording(to: url, recordingDelegate: self)
+        // Funnel the actual AVFoundation mutation onto sessionQueue, the same queue every other
+        // session/movieOutput mutation already runs on, so it can't race switchCamera/configure
+        // (finding #8).
+        sessionQueue.async {
+            guard !self.movieOutput.isRecording else { return }
+            self.movieOutput.startRecording(to: url, recordingDelegate: self)
+        }
     }
 
     private func endRecording() {
-        settleCounter = 0
-        if movieOutput.isRecording { movieOutput.stopRecording() }
+        sessionQueue.async { if self.movieOutput.isRecording { self.movieOutput.stopRecording() } }
     }
 
     func fileOutput(_ output: AVCaptureFileOutput, didFinishRecordingTo outputFileURL: URL,
                     from connections: [AVCaptureConnection], error: Error?) {
         DispatchQueue.main.async { self.isRecording = false }
+        if pendingTeardown {
+            pendingTeardown = false
+            try? FileManager.default.removeItem(at: outputFileURL)   // cancelled mid-swing; don't keep a half-finalized clip
+            sessionQueue.async { if self.session.isRunning { self.session.stopRunning() } }
+            return
+        }
         Task { await self.autoTrim(outputFileURL) }
     }
 
