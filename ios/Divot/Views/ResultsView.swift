@@ -13,6 +13,10 @@ struct ResultsView: View {
     @State private var shot: ShotData?
     @State private var showShotForm = false
     @State private var showCsvImport = false
+    // Share/GIF-export tasks previously kept running (and could still present the share sheet)
+    // after the user navigated away mid-export (finding Low). Stored so a new export cancels any
+    // still in flight, and cancelled outright on dismiss.
+    @State private var shareTask: Task<Void, Never>?
     private let haptics = HapticsPlayer()
 
     private var session: Session? { saved.session }
@@ -71,8 +75,8 @@ struct ResultsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button { shareReport() } label: { Label("Share report", systemImage: "doc.text") }
-                    Button { Task { await shareGif() } } label: { Label("Share sequence GIF", systemImage: "photo.stack") }
+                    Button { shareTask?.cancel(); shareTask = Task { shareReport() } } label: { Label("Share report", systemImage: "doc.text") }
+                    Button { shareTask?.cancel(); shareTask = Task { await shareGif() } } label: { Label("Share sequence GIF", systemImage: "photo.stack") }
                 } label: { Image(systemName: "square.and.arrow.up") }
             }
         }
@@ -86,6 +90,7 @@ struct ResultsView: View {
             if let session { CSVImportView(session: session, onImport: attachShots) }
         }
         .task { loadShot() }
+        .onDisappear { shareTask?.cancel() }
     }
 
     private func loadShot() {
@@ -129,13 +134,14 @@ struct ResultsView: View {
     }
 
     private func shareReport() {
-        guard let session, let url = ExportService.reportFile(session) else { return }
+        guard let session, let url = ExportService.reportFile(session), !Task.isCancelled else { return }
         shareItems = [url]; showShare = true
     }
 
     private func shareGif() async {
         guard let session else { return }
-        if let url = await ExportService.sequenceGif(videoURL: saved.videoURL, events: pickedSwing(session).events) {
+        if let url = await ExportService.sequenceGif(videoURL: saved.videoURL, events: pickedSwing(session).events),
+           !Task.isCancelled {
             shareItems = [url]; showShare = true
         }
     }
