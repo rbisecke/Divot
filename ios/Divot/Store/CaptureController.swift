@@ -233,8 +233,14 @@ final class CaptureController: NSObject, ObservableObject,
         export.timeRange = CMTimeRange(start: CMTime(seconds: win.start, preferredTimescale: 600),
                                        end: CMTime(seconds: win.end, preferredTimescale: 600))
         let final: URL
-        do { try await export.export(to: out, as: .mov); final = out }
-        catch { final = url }
+        do {
+            try await export.export(to: out, as: .mov)
+            final = out
+            // Trim succeeded; drop the untrimmed original instead of leaking one full-resolution
+            // recording into tmp/ on every successful auto-trim (finding #16).
+            try? FileManager.default.removeItem(at: url)
+        }
+        catch { final = url }   // export failed; `url` is the fallback return value, must not delete it
         await MainActor.run { self.lastClipURL = final }
     }
 

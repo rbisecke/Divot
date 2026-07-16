@@ -14,9 +14,12 @@ final class AnalysisStore: ObservableObject {
     func analyze(pickedURL: URL, club: ClubSpec, angle: Angle, hand: Hand) async -> (Session, String)? {
         busy = true; error = nil; phase = "Importing…"
         defer { busy = false; phase = "" }
+        // Hoisted above the do block (finding #16) so both catch arms can clean it up: the video
+        // is copied into permanent storage *before* analysis runs, so a thrown analysis
+        // previously left that copy behind forever with nothing ever removing it.
+        let filename = "\(UUID().uuidString).mov"
+        let dest = AppPaths.videosDir.appendingPathComponent(filename)
         do {
-            let filename = "\(UUID().uuidString).mov"
-            let dest = AppPaths.videosDir.appendingPathComponent(filename)
             try copy(from: pickedURL, to: dest)
 
             phase = "Analyzing…"
@@ -26,8 +29,10 @@ final class AnalysisStore: ObservableObject {
             }.value
             return (session, filename)
         } catch let e as SwingError {
+            try? FileManager.default.removeItem(at: dest)
             error = e.description; return nil
         } catch {
+            try? FileManager.default.removeItem(at: dest)
             self.error = error.localizedDescription; return nil
         }
     }
