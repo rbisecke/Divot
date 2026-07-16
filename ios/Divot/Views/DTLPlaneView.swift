@@ -127,7 +127,11 @@ struct DTLPlaneView: View {
             Text(label).font(.caption).padding(.horizontal, 10).padding(.vertical, 6)
                 .background(bind.wrappedValue ? color.opacity(0.3) : Color(.secondarySystemBackground),
                            in: Capsule())
-        }.buttonStyle(.plain)
+        }
+        .buttonStyle(.plain)
+        // Chip conveyed on/off purely by color; VoiceOver announced the same label regardless of
+        // state (Medium finding, same root cause as SwingPlayerView's rate chips / GhostCompareView).
+        .accessibilityAddTraits(bind.wrappedValue ? .isSelected : [])
     }
 
     @ViewBuilder private func tapHint(_ snap: FrameExtractor.PhaseSnapshot) -> some View {

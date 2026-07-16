@@ -80,6 +80,22 @@ final class AccessibilityAuditTests: XCTestCase {
             XCTAssertTrue(app.navigationBars["Add shot data"].waitForExistence(timeout: 10), "shot data sheet appears")
             try audit()
             app.buttons["Cancel"].tap()
+            XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 10))
+        }
+
+        // Plane & path's overlay-toggle chips round-trip the selected trait too (same
+        // color-only-state root cause as the rate chips above).
+        let planeLink = app.staticTexts["Plane & path (over-the-top)"]
+        if planeLink.waitForExistence(timeout: 5) {
+            planeLink.tap()
+            XCTAssertTrue(app.navigationBars["Plane & path"].waitForExistence(timeout: 10), "plane screen appears")
+            try audit()
+            let planeChip = app.buttons["Plane"]
+            if planeChip.waitForExistence(timeout: 5) {
+                let wasSelected = planeChip.isSelected
+                planeChip.tap()
+                XCTAssertNotEqual(planeChip.isSelected, wasSelected, "Plane chip's selected trait flips after tapping it")
+            }
         }
     }
 }

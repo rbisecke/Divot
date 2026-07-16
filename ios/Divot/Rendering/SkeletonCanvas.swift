@@ -48,6 +48,10 @@ struct SkeletonCanvas: View {
             }
             .frame(width: geo.size.width, height: geo.size.height)
         }
+        // The rendered still + overlays had no accessibility label at all (VoiceOver read a bare
+        // "Image") -- reached once the a11y audit's navigation extended into DTLPlaneView/
+        // GhostCompareView, same class of gap as finding #14.
+        .accessibilityLabel("\(snapshot.phase.rawValue.capitalized) frame")
     }
 
     private func drawLines(_ ctx: inout GraphicsContext, size: CGSize) {

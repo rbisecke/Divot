@@ -52,6 +52,9 @@ struct GhostCompareView: View {
                                     .background(on ? Color.accentColor : Color.gray.opacity(0.2), in: Capsule())
                                     .foregroundStyle(on ? .white : .primary)
                             }
+                            // Chip conveyed on/off purely by color; VoiceOver announced the same
+                            // label regardless of state (Medium finding).
+                            .accessibilityAddTraits(on ? .isSelected : [])
                         }
                     }
                     .padding(.horizontal)
