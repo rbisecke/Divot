@@ -18,11 +18,17 @@ struct JointSeries {
         times = pose.frames.map { $0.t }
         for j in Joint.allCases {
             var x = [Double](repeating: .nan, count: n), y = x
+            // Per-frame Vision confidence, threaded into smoothing below (finding #9b) so a
+            // barely-passing detection (just above PoseEstimator's flat minConfidence cutoff)
+            // doesn't get weighted identically to a confident one. Gap-filled/interpolated frames
+            // (the joint wasn't detected at all that frame) default to full weight (1.0) — interp
+            // already handles those gaps, so they shouldn't be double-penalized here too.
+            var c = [Double](repeating: 1.0, count: n)
             for (i, f) in pose.frames.enumerated() {
-                if let p = f.joints[j] { x[i] = p.x; y[i] = p.y }
+                if let p = f.joints[j] { x[i] = p.x; y[i] = p.y; c[i] = p.c }
             }
             JointSeries.interp(&x); JointSeries.interp(&y)
-            xs[j] = JointSeries.smooth(x); ys[j] = JointSeries.smooth(y)
+            xs[j] = JointSeries.smooth(x, weights: c); ys[j] = JointSeries.smooth(y, weights: c)
         }
     }
     func jx(_ j: Joint) -> [Double] { xs[j] ?? [Double](repeating: .nan, count: n) }
@@ -37,10 +43,17 @@ struct JointSeries {
         if let f = a.firstIndex(where: { !$0.isNaN }) { for k in 0..<f { a[k] = a[f] } }
         if let l = a.lastIndex(where: { !$0.isNaN }) { for k in (l+1)..<a.count { a[k] = a[l] } }
     }
-    static func smooth(_ a: [Double], _ win: Int = 3) -> [Double] {
+    /// `weights`, if provided, down-weights low-confidence samples in the moving average instead
+    /// of treating every in-window sample as equally trustworthy (finding #9b). Declared with
+    /// `win` still the second positional parameter and `weights` trailing/labeled, so every
+    /// existing unlabeled call site (`smooth(a)`, `smooth(a, win)`) keeps compiling unchanged.
+    static func smooth(_ a: [Double], _ win: Int = 3, weights: [Double]? = nil) -> [Double] {
         var o = a
         for i in 0..<a.count { var s = 0.0, c = 0.0
-            for k in max(0,i-win)...min(a.count-1,i+win) where !a[k].isNaN { s += a[k]; c += 1 }
+            for k in max(0,i-win)...min(a.count-1,i+win) where !a[k].isNaN {
+                let wt = weights?[k] ?? 1
+                s += a[k] * wt; c += wt
+            }
             o[i] = c > 0 ? s/c : a[i] }
         return o
     }
