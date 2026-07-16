@@ -729,6 +729,48 @@ final class AppValidationTests: XCTestCase {
         XCTAssertEqual(m.ball?.x ?? 0, 0.5, accuracy: 0.0001)
     }
 
+    // MARK: Ball-tap letterboxing (finding #10)
+
+    /// Container letterboxed left/right (image taller/narrower than the container): a tap at the
+    /// container's exact center must map to image-space (0.5, 0.5), not be offset by the padding.
+    func testBallTapMapsCenterThroughLeftRightLetterbox() throws {
+        let container = CGSize(width: 400, height: 300)
+        let image = CGSize(width: 300, height: 300)   // square image in a wider container
+        let center = CGPoint(x: container.width / 2, y: container.height / 2)
+        let n = try XCTUnwrap(BallTapMath.normalizedPoint(tap: center, imageSize: image, container: container))
+        XCTAssertEqual(n.x, 0.5, accuracy: 0.001)
+        XCTAssertEqual(n.y, 0.5, accuracy: 0.001)
+    }
+
+    /// Container letterboxed top/bottom (image wider/shorter than the container).
+    func testBallTapMapsCenterThroughTopBottomLetterbox() throws {
+        let container = CGSize(width: 300, height: 400)
+        let image = CGSize(width: 300, height: 300)
+        let center = CGPoint(x: container.width / 2, y: container.height / 2)
+        let n = try XCTUnwrap(BallTapMath.normalizedPoint(tap: center, imageSize: image, container: container))
+        XCTAssertEqual(n.x, 0.5, accuracy: 0.001)
+        XCTAssertEqual(n.y, 0.5, accuracy: 0.001)
+    }
+
+    /// A tap that lands in the letterbox padding (outside the actual drawn image) is ignored.
+    func testBallTapInLetterboxPaddingIsIgnored() {
+        let container = CGSize(width: 400, height: 300)   // wider than the square image below
+        let image = CGSize(width: 300, height: 300)
+        // Image draws at x in [50, 350]; a tap at x=10 is in the left padding.
+        let n = BallTapMath.normalizedPoint(tap: CGPoint(x: 10, y: 150), imageSize: image, container: container)
+        XCTAssertNil(n, "tap in the letterbox padding should be ignored, not clamped into the image")
+    }
+
+    /// A tap exactly on the image's edge clamps to 0/1, not just outside it.
+    func testBallTapAtImageEdgeClamps() throws {
+        let container = CGSize(width: 400, height: 300)
+        let image = CGSize(width: 300, height: 300)
+        let rect = SkeletonCanvas.aspectFitRect(image: image, in: container)
+        let n = try XCTUnwrap(BallTapMath.normalizedPoint(tap: CGPoint(x: rect.minX, y: rect.minY), imageSize: image, container: container))
+        XCTAssertEqual(n.x, 0, accuracy: 0.001)
+        XCTAssertEqual(n.y, 0, accuracy: 0.001)
+    }
+
     /// C6 — the back camera advertises a high-frame-rate format (needed for club-head vision). Device-only.
     func test240fpsFormatAvailableOnDevice() throws {
         #if targetEnvironment(simulator)

@@ -28,7 +28,7 @@ struct SkeletonCanvas: View {
 
     var body: some View {
         GeometryReader { geo in
-            let size = aspectFit(image: snapshot.image.size, in: geo.size)
+            let size = Self.aspectFit(image: snapshot.image.size, in: geo.size)
             ZStack {
                 Image(uiImage: snapshot.image)
                     .resizable()
@@ -112,9 +112,19 @@ struct SkeletonCanvas: View {
         }
     }
 
-    private func aspectFit(image: CGSize, in container: CGSize) -> CGSize {
+    static func aspectFit(image: CGSize, in container: CGSize) -> CGSize {
         guard image.width > 0, image.height > 0 else { return container }
         let scale = min(container.width / image.width, container.height / image.height)
         return CGSize(width: image.width * scale, height: image.height * scale)
+    }
+
+    /// The centered sub-rect this canvas actually draws the (letterboxed) image + overlays into —
+    /// `body` above only used the size half of this internally, but a container tap gesture
+    /// (`DTLPlaneView`'s ball-anchor tap) needs the full rect to map a tap through the same
+    /// letterboxing math, or it lands offset from where the user actually tapped (finding #10).
+    static func aspectFitRect(image: CGSize, in container: CGSize) -> CGRect {
+        let size = aspectFit(image: image, in: container)
+        let origin = CGPoint(x: (container.width - size.width) / 2, y: (container.height - size.height) / 2)
+        return CGRect(origin: origin, size: size)
     }
 }
