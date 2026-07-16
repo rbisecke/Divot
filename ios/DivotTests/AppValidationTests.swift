@@ -129,6 +129,14 @@ final class AppValidationTests: XCTestCase {
 
     // MARK: Persistence
 
+    /// Regression test for finding #12: swing video must never be included in an iCloud device
+    /// backup, even though CLAUDE.md/SECURITY.md's "video never leaves the phone" claim doesn't by
+    /// itself stop Documents/ from being backed up by default.
+    func testVideosDirExcludedFromBackup() throws {
+        let values = try AppPaths.videosDir.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true, "swing video must never be included in iCloud device backup")
+    }
+
     func testSavedSessionRoundTrip() throws {
         // Replay provider, not the real VisionPoseProvider over sampleClip(): the Simulator has no
         // body-pose model, so live Vision detects zero joints in every frame of the placeholder
