@@ -12,6 +12,11 @@ final class AnalysisStore: ObservableObject {
     /// Copy the picked video into Documents, run the analysis, and return (Session, filename).
     /// The video is copied first so results survive even if the original is deleted from Photos.
     func analyze(pickedURL: URL, club: ClubSpec, angle: Angle, hand: Hand) async -> (Session, String)? {
+        // Re-entrancy guard (finding Low): AnalysisStore is @MainActor, so reads/writes of `busy`
+        // are already actor-serialized — a second call arriving while one is in flight (e.g. a
+        // double-tap on the import button) would otherwise race the same `dest` file underneath
+        // the first call's copy/analyze/cleanup.
+        guard !busy else { return nil }
         busy = true; error = nil; phase = "Importing…"
         defer { busy = false; phase = "" }
         // Hoisted above the do block (finding #16) so both catch arms can clean it up: the video
