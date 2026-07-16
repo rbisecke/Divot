@@ -6,10 +6,14 @@ import Foundation
 
 public enum MotionTrigger {
     /// Returns the [start, end] index window bracketing the swing, or nil if no clear burst.
-    /// `riseFactor` = how much the peak must exceed the mean to count as a swing.
+    /// `riseFactor` = how much the peak must exceed the mean to count as a swing. `debounceSeconds`
+    /// requires a minimum run of consecutive sub-threshold samples before declaring a boundary
+    /// (Medium finding: the window-expansion loop used to stop at the very first sample that
+    /// dipped below threshold, with no debounce, so a brief noise dip mid-swing could truncate
+    /// the window before the pre/post roll below is even applied).
     public static func swingWindow(leadWristSpeed speed: [Double], fps: Double,
                                    preRoll: Double = 0.5, postRoll: Double = 0.7,
-                                   riseFactor: Double = 3.0) -> (startIdx: Int, endIdx: Int)? {
+                                   riseFactor: Double = 3.0, debounceSeconds: Double = 0.05) -> (startIdx: Int, endIdx: Int)? {
         let n = speed.count
         guard n >= 3, fps > 0 else { return nil }
         let sm = JointSeries.smooth(speed, 2)
@@ -19,10 +23,19 @@ public enum MotionTrigger {
         guard peakV > 1e-6, peakV > mean * riseFactor else { return nil }
 
         let thresh = peakV * 0.25
+        let debounce = Swift.max(1, Int(debounceSeconds * fps))
         var start = peakIdx
-        while start > 0 && sm[start] > thresh { start -= 1 }
+        while start > 0 {
+            let lo = Swift.max(0, start - debounce)
+            if sm[lo...start].allSatisfy({ $0 <= thresh }) { break }
+            start -= 1
+        }
         var end = peakIdx
-        while end < n - 1 && sm[end] > thresh { end += 1 }
+        while end < n - 1 {
+            let hi = Swift.min(n - 1, end + debounce)
+            if sm[end...hi].allSatisfy({ $0 <= thresh }) { break }
+            end += 1
+        }
 
         let pre = Int(preRoll * fps), post = Int(postRoll * fps)
         return (Swift.max(0, start - pre), Swift.min(n - 1, end + post))

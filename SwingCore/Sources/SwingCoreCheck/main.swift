@@ -429,6 +429,25 @@ if let w = MotionTrigger.swingWindow(leadWristSpeed: burst, fps: 30) {
 } else { check(false, "burst series ⇒ a window") }
 check(MotionTrigger.swingWindow(leadWristSpeed: [Double](repeating: 1.0, count: 40), fps: 30) == nil, "flat series ⇒ nil")
 
+// Medium finding — a brief noise dip inside an otherwise-wide, clean burst must not truncate
+// the window early. preRoll/postRoll zeroed so the check observes the raw start/end boundary
+// directly, not padding that would mask a truncation either way.
+//
+// swingWindow smooths with a fixed +/-2 boxcar (JointSeries.smooth(_, 2)) before thresholding,
+// so a single raw sample anomaly always blurs into a uniform 5-wide dip in the smoothed series —
+// too wide to distinguish a hysteresis fix from the old single-sample check. A 5-raw-sample dip
+// (matching the smoothing window) convolves to a *single* smoothed index dipping just below
+// threshold, with its immediate neighbors staying clearly above — a faithful, minimal stand-in
+// for "a brief noise dip mid-swing" that only a debounce can see through.
+// Generous baseline padding keeps the series mean well below the riseFactor gate (peakV must
+// exceed mean * 3) despite the burst itself being fairly wide.
+var dipBurst = [Double](repeating: 0.2, count: 250)
+for i in 100...134 { dipBurst[i] = 5.0 }
+for i in 114...118 { dipBurst[i] = 0.8 }   // dips the single smoothed index 116 to 0.8 (thresh 1.25)
+if let dw = MotionTrigger.swingWindow(leadWristSpeed: dipBurst, fps: 30, preRoll: 0, postRoll: 0) {
+    check(dw.endIdx >= 125, "brief dip doesn't truncate the window early (endIdx \(dw.endIdx), burst runs to 134)")
+} else { check(false, "dip burst ⇒ a window") }
+
 // [P2.2] EventAlignment — pure.
 print("[EventAlignment]")
 let ea = SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 1.0, frame: 30),
