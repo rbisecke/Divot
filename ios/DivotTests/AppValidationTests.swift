@@ -130,8 +130,16 @@ final class AppValidationTests: XCTestCase {
     // MARK: Persistence
 
     func testSavedSessionRoundTrip() throws {
-        let clip = try sampleClip()
-        let session = try SwingAnalyzer.analyzeSession(video: clip, club: pw, angle: .faceOn, hand: .right)
+        // Replay provider, not the real VisionPoseProvider over sampleClip(): the Simulator has no
+        // body-pose model, so live Vision detects zero joints in every frame of the placeholder
+        // clip. Before finding #6's fix that silently produced a garbage-but-non-throwing swing
+        // (exactly the bug #6 fixes); now it correctly throws lowPoseConfidence/noSwingDetected,
+        // so this SwiftData round-trip test needs a real (replayed) swing to persist instead.
+        let bundle = Bundle(for: type(of: self))
+        let jsonURL = try XCTUnwrap(bundle.url(forResource: "sample_swing.pose", withExtension: "json"))
+        let replay = try ReplayPoseProvider(contentsOf: jsonURL)
+        let session = try SwingAnalyzer.analyzeSession(video: URL(fileURLWithPath: "/dev/null"),
+                                                        club: pw, angle: .faceOn, hand: .right, provider: replay)
 
         let container = try ModelContainer(for: SavedSession.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))

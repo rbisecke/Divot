@@ -55,7 +55,7 @@ public enum SwingLines {
         guard s.n > 0 else { return [] }
         let lo = min(max(from, 0), s.n - 1), hi = min(max(to, 0), s.n - 1)
         guard hi >= lo else { return [] }
-        let wr = hand == .left ? Joint.rightWrist : .leftWrist
+        let wr = hand.leadWrist
         let xs = s.jx(wr), ys = s.jy(wr)
         var pts: [CGPoint] = []
         for i in lo...hi where xs[i].isFinite && ys[i].isFinite {

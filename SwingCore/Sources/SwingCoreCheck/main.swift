@@ -230,10 +230,10 @@ if let clipPath, FileManager.default.fileExists(atPath: clipPath) {
 
         // [S3.5] End-to-end facade: analyze(video:) and analyzeSession(video:).
         print("[Pipeline]")
-        let one = SwingAnalyzer.analyze(seq, club: pwSpec, angle: .faceOn)
+        let one = try SwingAnalyzer.analyze(seq, club: pwSpec, angle: .faceOn)
         check(one.faults.count >= 1 && one.comparison != nil, "analyze() yields faults + comparison")
         check(one.events.impact.frame == ev.impact.frame, "facade events match direct EventDetector")
-        let sessionSwings = SwingAnalyzer.analyze(seq, club: pwSpec, angle: .faceOn, index: 1)
+        let sessionSwings = try SwingAnalyzer.analyze(seq, club: pwSpec, angle: .faceOn, index: 1)
         let st = SessionBuilder.stats([sessionSwings])
         check(st.bestSwing == 1, "single-swing session best == 1")
         check(st.focus != "keep grooving contact", "focus names the dominant fault (\(st.focus))")
@@ -325,6 +325,34 @@ if let clipPath, FileManager.default.fileExists(atPath: clipPath) {
     skip("Pose+Segment+Events+Metrics+Faults+Reference+Template+Comparator+Pipeline+Benchmarks+SwingLines+AngleDetector+P2clip",
          "no test clip (set SWINGCORE_TEST_CLIP to enable)")
 }
+
+// [Pipeline degenerate] — SwingAnalyzer.analyze(_ pose:) guards, no clip needed (findings #2, #6).
+print("[Pipeline degenerate]")
+let empty0 = PoseSequence(fps: 30, width: 1080, height: 1920, frames: [])
+do { _ = try SwingAnalyzer.analyze(empty0, club: pwSpec, angle: .faceOn); check(false, "0-frame pose should throw") }
+catch SwingError.noSwingDetected { check(true, "0-frame pose throws noSwingDetected") }
+catch { check(false, "0-frame pose threw wrong error: \(error)") }
+
+let oneFrame = PoseSequence(fps: 30, width: 1080, height: 1920, frames: [PoseFrame(t: 0, joints: [:])])
+do { _ = try SwingAnalyzer.analyze(oneFrame, club: pwSpec, angle: .faceOn); check(false, "1-frame pose should throw") }
+catch SwingError.noSwingDetected { check(true, "1-frame pose throws noSwingDetected") }
+catch { check(false, "1-frame pose threw wrong error: \(error)") }
+
+// finding #6 — lead wrist never detected across an otherwise-plausible clip (occluded/out of
+// frame/bad angle): every other joint is present in every frame, only the lead wrist is missing.
+func noWristPose() -> PoseSequence {
+    var frames: [PoseFrame] = []
+    for i in 0..<20 {
+        frames.append(PoseFrame(t: Double(i)/30, joints: [
+            .leftShoulder: JointPoint(x: 0.42, y: 0.75, c: 1), .rightShoulder: JointPoint(x: 0.58, y: 0.75, c: 1),
+            .leftHip: JointPoint(x: 0.45, y: 0.55, c: 1), .rightHip: JointPoint(x: 0.55, y: 0.55, c: 1),
+        ]))  // leftWrist deliberately absent in every frame
+    }
+    return PoseSequence(fps: 30, width: 1000, height: 1000, frames: frames)
+}
+do { _ = try SwingAnalyzer.analyze(noWristPose(), club: pwSpec, angle: .faceOn); check(false, "fully-undetected lead wrist should throw") }
+catch SwingError.lowPoseConfidence { check(true, "fully-undetected lead wrist throws lowPoseConfidence") }
+catch { check(false, "wrong error for undetected wrist: \(error)") }
 
 // [P1.5] Trends — pure aggregation over synthetic sessions (no clip needed).
 print("[Trends]")

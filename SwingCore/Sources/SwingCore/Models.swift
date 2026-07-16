@@ -6,6 +6,13 @@ import CoreGraphics
 public enum Angle: String, Codable, Sendable { case faceOn = "face_on", dtl }
 public enum Hand: String, Codable, Sendable { case right = "R", left = "L" }
 
+public extension Hand {
+    /// The wrist that leads the swing (nearest the target at address) for this handedness —
+    /// consolidates what was previously copy-pasted separately in EventDetector.detect,
+    /// Segmenter.swings, and SwingLines.shaftPlane.
+    var leadWrist: Joint { self == .left ? .rightWrist : .leftWrist }
+}
+
 // ClubCategory + ClubSpec + Bag live in ClubModel.swift (S1 — open bag model).
 
 /// Vision body-pose joints we track (subset of VNHumanBodyPoseObservation.JointName).

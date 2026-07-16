@@ -54,7 +54,7 @@ private func argmin(_ a: [Double], _ lo: Int, _ hi: Int) -> Int { var bi = lo, b
 public enum EventDetector {
     public static func detect(_ pose: PoseSequence, hand: Hand = .right) -> SwingEvents {
         let s = JointSeries(pose); let n = s.n
-        let lead: Joint = hand == .left ? .rightWrist : .leftWrist
+        let lead: Joint = hand.leadWrist
         let lwx = s.jx(lead), lwy = s.jy(lead)
         var speed = [Double](repeating: 0, count: n)
         for i in 1..<max(1, n) { let dx = (lwx[i]-lwx[i-1])*s.w, dy = (lwy[i]-lwy[i-1])*s.h; speed[i] = (dx*dx+dy*dy).squareRoot() }

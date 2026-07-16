@@ -6,7 +6,18 @@ import Foundation
 public enum SwingAnalyzer {
 
     /// Analyze an already-extracted pose sequence (one swing).
-    public static func analyze(_ pose: PoseSequence, club: ClubSpec, angle: Angle, hand: Hand = .right, index: Int = 1) -> SwingAnalysis {
+    public static func analyze(_ pose: PoseSequence, club: ClubSpec, angle: Angle, hand: Hand = .right, index: Int = 1) throws -> SwingAnalysis {
+        // A 0- or 1-frame sequence would index argmax/argmin out of range further down the
+        // pipeline (finding #2) — matches the >= 5 threshold analyzeSession already applies to
+        // its own per-window slices before ever reaching this function.
+        guard pose.frames.count >= 5 else { throw SwingError.noSwingDetected }
+        // If the tracked lead wrist is undetected across (almost) the whole clip, JointSeries has
+        // no anchor to interpolate from and every downstream argmax/argmin collapses to a fixed,
+        // meaningless index — a silently-wrong analysis with no error surfaced (finding #6). This
+        // coverage check is independent of PoseEstimator's existing per-frame minConfidence gate,
+        // which only decides whether a joint counts as detected within a single frame.
+        let leadDetected = pose.frames.filter { $0.joints[hand.leadWrist] != nil }.count
+        guard Double(leadDetected) / Double(pose.frames.count) >= 0.5 else { throw SwingError.lowPoseConfidence }
         let ev = EventDetector.detect(pose, hand: hand)
         let met = MetricsEngine.compute(pose, events: ev, angle: angle, hand: hand)
         let faults = FaultEvaluator.evaluate(met, category: club.category, angle: angle)
@@ -25,7 +36,7 @@ public enum SwingAnalyzer {
     /// Analyze a single-swing clip.
     public static func analyze(video: URL, club: ClubSpec, angle: Angle, hand: Hand = .right, index: Int = 1,
                                provider: PoseProvider = VisionPoseProvider()) throws -> SwingAnalysis {
-        analyze(try provider.pose(for: video, fps: 30), club: club, angle: angle, hand: hand, index: index)
+        try analyze(try provider.pose(for: video, fps: 30), club: club, angle: angle, hand: hand, index: index)
     }
 
     /// Analyze a clip that may contain several swings → a full Session with stats.
@@ -36,7 +47,13 @@ public enum SwingAnalyzer {
         let subs = windows.isEmpty ? [pose] : windows.map { slice(pose, from: $0.start, to: $0.end) }
         var swings: [SwingAnalysis] = []
         for (i, sub) in subs.enumerated() where sub.frames.count >= 5 {
-            swings.append(analyze(sub, club: club, angle: angle, hand: hand, index: i + 1))
+            // A single poorly-tracked window (e.g. lead wrist occluded for that one swing) now
+            // throws lowPoseConfidence instead of silently producing garbage (finding #6) — skip
+            // just that window rather than aborting the whole multi-swing session over one bad
+            // swing; noSwingDetected below still covers the all-windows-bad case.
+            if let a = try? analyze(sub, club: club, angle: angle, hand: hand, index: i + 1) {
+                swings.append(a)
+            }
         }
         if swings.isEmpty { throw SwingError.noSwingDetected }
         return Session(date: date, club: club, angle: angle, hand: hand, swings: swings, stats: SessionBuilder.stats(swings))
