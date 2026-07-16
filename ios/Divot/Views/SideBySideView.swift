@@ -84,9 +84,25 @@ struct SideBySideView: View {
         .onAppear {
             playerA.replaceCurrentItem(with: AVPlayerItem(url: a.videoURL))
             playerB.replaceCurrentItem(with: AVPlayerItem(url: b.videoURL))
+        }
+        // seek() called synchronously right after replaceCurrentItem used to no-op (an
+        // AVPlayerItem isn't seekable until it reaches .readyToPlay), silently leaving both
+        // players on frame 0 instead of the event-aligned start (Medium finding). Waits for both
+        // items' readiness first.
+        .task {
+            await waitUntilReady(playerA)
+            await waitUntilReady(playerB)
             seek()
         }
         .task { await computeMatch() }
+    }
+
+    private func waitUntilReady(_ player: AVPlayer) async {
+        guard let item = player.currentItem else { return }
+        for _ in 0..<50 {
+            if item.status == .readyToPlay || item.status == .failed { return }
+            try? await Task.sleep(nanoseconds: 100_000_000)
+        }
     }
 
     private func seek() {
