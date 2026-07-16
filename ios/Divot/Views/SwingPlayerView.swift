@@ -24,27 +24,50 @@ enum ScrubberMath {
 @MainActor
 final class SwingPlayerModel: ObservableObject {
     let player: AVPlayer
-    let duration: Double
-    let nominalFrameRate: Float
+    // Populated asynchronously by loadMetadata() rather than read synchronously off `asset` in
+    // init (finding Low): AVAsset.duration/tracks are deprecated blocking calls that stalled the
+    // NavigationLink push while decoding the container. Harmless defaults until then; a 9:16
+    // portrait guess for aspectRatio matches the view's previous hardcoded value.
+    @Published private(set) var duration: Double = 0
+    @Published private(set) var nominalFrameRate: Float = 30
+    @Published private(set) var aspectRatio: Double = 9.0 / 16.0
     @Published var current: Double = 0
     @Published var rate: Float = 0
     private var observer: Any?
-    private let frameDur: Double
+    private var frameDur: Double = 1.0 / 30
+    private let url: URL
 
     init(url: URL) {
-        let asset = AVURLAsset(url: url)
+        self.url = url
         player = AVPlayer(url: url)
-        let dur = CMTimeGetSeconds(asset.duration)
-        duration = dur.isFinite ? dur : 0
-        let fps = asset.tracks(withMediaType: .video).first?.nominalFrameRate ?? 30
-        nominalFrameRate = fps
-        frameDur = fps > 0 ? 1.0 / Double(fps) : 1.0 / 30
         observer = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.03, preferredTimescale: 600), queue: .main) { [weak self] t in
             self?.current = CMTimeGetSeconds(t)
         }
     }
     deinit { if let o = observer { player.removeTimeObserver(o) } }
+
+    /// Async replacement for the old synchronous `asset.duration`/`asset.tracks` reads. Called
+    /// from the view's `.task { await model.loadMetadata() }`, matching the existing
+    /// `.task { await load() }` idiom used elsewhere in the view layer.
+    func loadMetadata() async {
+        let asset = AVURLAsset(url: url)
+        if let dur = try? await asset.load(.duration) {
+            let d = CMTimeGetSeconds(dur)
+            if d.isFinite, d > 0 { duration = d }
+        }
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first else { return }
+        if let fps = try? await track.load(.nominalFrameRate), fps > 0 {
+            nominalFrameRate = fps
+            frameDur = 1.0 / Double(fps)
+        }
+        if let size = try? await track.load(.naturalSize),
+           let transform = try? await track.load(.preferredTransform) {
+            let t = size.applying(transform)
+            let w = abs(t.width), h = abs(t.height)
+            if w > 0, h > 0 { aspectRatio = w / h }
+        }
+    }
 
     func seek(toFraction f: Double) { seek(to: f * duration) }
     func seek(to t: Double) {
@@ -81,7 +104,7 @@ struct SwingPlayerView: View {
     var body: some View {
         VStack(spacing: 12) {
             PlayerLayerView(player: model.player)
-                .aspectRatio(9.0 / 16.0, contentMode: .fit)
+                .aspectRatio(model.aspectRatio, contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .background(Color.black)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -97,6 +120,7 @@ struct SwingPlayerView: View {
         .padding()
         .navigationTitle("Playback")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await model.loadMetadata() }
     }
 
     private var scrubber: some View {

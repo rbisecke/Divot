@@ -30,7 +30,7 @@ Not distributed on the App Store.
 - **Engine (T1, headless, no Xcode needed):** `make validate`  → expect `ALL PASS, 188 checks`
 - **Generate the Xcode project:** `make generate` (XcodeGen from `ios/project.yml`; the
   `.xcodeproj` is generated, not committed)
-- **App (T2, simulator):** `make test` → expect 70 unit (+4 device-skipped) + 2 UI, 0 failures
+- **App (T2, simulator):** `make test` → expect 71 unit (+4 device-skipped) + 2 UI, 0 failures
 - **Device (T3, local only):** `make device-test DEVICE=<udid>` (`xcrun devicectl list devices`)
 
 ## Validation tiers (gate every change)

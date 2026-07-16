@@ -507,6 +507,18 @@ final class AppValidationTests: XCTestCase {
         XCTAssertFalse(ScrubberMath.showsLowFpsNotice(120))
     }
 
+    /// SwingPlayerModel.loadMetadata() replaced synchronous asset.duration/tracks reads with the
+    /// async load(_:) API (finding Low) — confirm it actually populates duration/aspectRatio from
+    /// the repo's synthetic fixture clip instead of leaving the harmless defaults in place.
+    @MainActor
+    func testSwingPlayerModelLoadsMetadataAsync() async throws {
+        let model = SwingPlayerModel(url: try sampleClip())
+        XCTAssertEqual(model.duration, 0, "duration is the harmless default before loadMetadata()")
+        await model.loadMetadata()
+        XCTAssertGreaterThan(model.duration, 0, "loadMetadata() populates a real duration")
+        XCTAssertGreaterThan(model.aspectRatio, 0, "loadMetadata() populates a sane (positive) aspect ratio")
+    }
+
     func testTempoCardFormatting() {
         XCTAssertEqual(TempoFormat.ratioText(2.94), "2.9 : 1")
         XCTAssertEqual(TempoFormat.ratioText(nil), "—")
