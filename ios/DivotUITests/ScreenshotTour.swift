@@ -25,24 +25,28 @@ final class ScreenshotTour: XCTestCase {
         shot("02-history")
 
         app.cells.firstMatch.tap()
-        sleep(3)                    // let the results + video-derived sequence strip render
+        // Let the results + video-derived sequence strip render: wait for the "Play / slow-mo"
+        // link, which only appears once a swing/session was actually found and laid out.
+        UITestWait.element(app.staticTexts["Play / slow-mo"])
         shot("03-results-top")
-        app.swipeUp(); sleep(1)
+        app.swipeUp()
+        UITestWait.element(app.buttons["Plane & path (over-the-top)"])
         shot("04-results-mid")
-        app.swipeUp(); sleep(1)
+        app.swipeUp()
+        UITestWait.element(app.buttons["Compare to the pro (ghost overlay)"])
         shot("05-results-bottom")
         if app.navigationBars.buttons.firstMatch.exists { app.navigationBars.buttons.firstMatch.tap() }
 
         app.tabBars.buttons["Trends"].tap()
-        sleep(2)
+        UITestWait.element(app.staticTexts["Metric"])
         shot("06-trends")
 
         app.tabBars.buttons["Compare"].tap()
-        sleep(1)
+        UITestWait.navigationTitle(app, "Compare")
         shot("07-compare")
 
         app.tabBars.buttons["Settings"].tap()
-        sleep(1)
+        UITestWait.navigationTitle(app, "Settings")
         shot("08-settings")
     }
 }

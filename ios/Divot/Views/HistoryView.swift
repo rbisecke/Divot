@@ -55,6 +55,9 @@ struct HistoryView: View {
         for i in offsets {
             let saved = sessions[i]
             try? FileManager.default.removeItem(at: saved.videoURL)
+            // Companion cleanup for finding #13's pose cache: don't leak a cached PoseSequence
+            // for a session whose video no longer exists.
+            try? FileManager.default.removeItem(at: saved.poseCacheURL)
             context.delete(saved)
         }
         try? context.save()

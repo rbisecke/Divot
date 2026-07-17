@@ -53,14 +53,39 @@ final class SavedSession {
     var videoURL: URL {
         AppPaths.videosDir.appendingPathComponent(videoFilename)
     }
+
+    /// Where this session's cached PoseSequence (if any) lives on disk — see PoseCache.swift
+    /// (finding #13). The video file never changes in place once written, so no cache-key beyond
+    /// the filename is needed.
+    var poseCacheURL: URL {
+        AppPaths.poseCacheDir.appendingPathComponent(videoFilename).appendingPathExtension("pose.json")
+    }
 }
 
 enum AppPaths {
     static var documents: URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
     }
+    /// Swing video is sensitive body-pose data and CLAUDE.md/SECURITY.md both assert it "never
+    /// leaves the phone" -- but files under Documents/ are backed up to iCloud by default, which
+    /// is a real gap between that claim and actual behavior if the user has device backup
+    /// enabled. Excluded from backup here, at the moment the directory is created (finding #12).
+    /// Also sets a stronger file-protection class than the iOS default
+    /// (.completeUntilFirstUserAuthentication), given this is framed as sensitive data.
     static var videosDir: URL {
-        let d = documents.appendingPathComponent("videos", isDirectory: true)
+        var d = documents.appendingPathComponent("videos", isDirectory: true)
+        try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
+        var rv = URLResourceValues()
+        rv.isExcludedFromBackup = true
+        try? d.setResourceValues(rv)
+        try? FileManager.default.setAttributes([.protectionKey: FileProtectionType.completeUnlessOpen], ofItemAtPath: d.path)
+        return d
+    }
+    /// Cached PoseSequence JSON, one per saved video — avoids re-running the single most
+    /// expensive operation in the app (full frame decode + per-frame Vision) on every visit to a
+    /// review screen (finding #13).
+    static var poseCacheDir: URL {
+        let d = documents.appendingPathComponent("poseCache", isDirectory: true)
         try? FileManager.default.createDirectory(at: d, withIntermediateDirectories: true)
         return d
     }

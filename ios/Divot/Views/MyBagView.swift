@@ -9,6 +9,7 @@ struct MyBagView: View {
     @Environment(\.modelContext) private var context
     @Query(sort: \BagClub.order) private var clubs: [BagClub]
     @State private var showAdd = false
+    @State private var error: String?
 
     private var active: [BagClub] { clubs.filter { !$0.retired } }
     private var retired: [BagClub] { clubs.filter { $0.retired } }
@@ -26,11 +27,14 @@ struct MyBagView: View {
                         HStack {
                             Text(club.spec.displayName).foregroundStyle(.secondary)
                             Spacer()
-                            Button("Restore") { BagEditor.restore(club, in: context) }
+                            Button("Restore") { perform { try BagEditor.restore(club, in: context) } }
                                 .buttonStyle(.borderless)
                         }
                     }
                 }
+            }
+            if let error {
+                Text(error).foregroundStyle(.red).font(.footnote)
             }
         }
         .listRowBackground(Color.surface)
@@ -52,10 +56,10 @@ struct MyBagView: View {
             Spacer()
         }
         .swipeActions(edge: .trailing) {
-            Button(role: .destructive) { BagEditor.delete(club, in: context) } label: {
+            Button(role: .destructive) { perform { try BagEditor.delete(club, in: context) } } label: {
                 Label("Delete", systemImage: "trash")
             }
-            Button { BagEditor.retire(club, in: context) } label: {
+            Button { perform { try BagEditor.retire(club, in: context) } } label: {
                 Label("Retire", systemImage: "archivebox")
             }.tint(.orange)
         }
@@ -64,7 +68,15 @@ struct MyBagView: View {
     private func move(_ offsets: IndexSet, _ to: Int) {
         var ordered = active
         ordered.move(fromOffsets: offsets, toOffset: to)
-        BagEditor.reorder(ordered, in: context)
+        perform { try BagEditor.reorder(ordered, in: context) }
+    }
+
+    /// Reuses the app's existing "@State error: String? + Text" pattern (already used by
+    /// ImportView/AnalysisStore) rather than inventing a new UI idiom for surfacing a bag-edit
+    /// persistence failure.
+    private func perform(_ action: () throws -> Void) {
+        do { error = nil; try action() }
+        catch { self.error = "Couldn't save: \(error.localizedDescription)" }
     }
 }
 
@@ -78,6 +90,7 @@ struct AddClubSheet: View {
     @State private var number = 7
     @State private var loft = 54.0
     @State private var label = ""
+    @State private var error: String?
 
     private var isWedge: Bool { category == .wedge }
     private var isDriver: Bool { category == .driver }
@@ -121,6 +134,9 @@ struct AddClubSheet: View {
                     TextField(labelPlaceholder, text: $label)
                         .textInputAutocapitalization(.characters)
                 }
+                if let error {
+                    Text(error).foregroundStyle(.red).font(.footnote)
+                }
             }
             .navigationTitle("Add club")
             .navigationBarTitleDisplayMode(.inline)
@@ -154,7 +170,11 @@ struct AddClubSheet: View {
         } else {
             spec = BagEditor.numberedSpec(category: category, number: number, customLabel: label)
         }
-        BagEditor.add(spec, to: context)
-        dismiss()
+        do {
+            try BagEditor.add(spec, to: context)
+            dismiss()
+        } catch {
+            self.error = "Couldn't save: \(error.localizedDescription)"
+        }
     }
 }

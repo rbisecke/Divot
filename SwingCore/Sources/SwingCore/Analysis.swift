@@ -8,6 +8,7 @@ import Foundation
 struct JointSeries {
     let n: Int
     let w: Double, h: Double
+    let fps: Double
     let times: [Double]
     private var xs: [Joint: [Double]] = [:]
     private var ys: [Joint: [Double]] = [:]
@@ -15,14 +16,21 @@ struct JointSeries {
     init(_ pose: PoseSequence) {
         n = pose.frames.count
         w = Double(pose.width); h = Double(pose.height)
+        fps = pose.fps
         times = pose.frames.map { $0.t }
         for j in Joint.allCases {
             var x = [Double](repeating: .nan, count: n), y = x
+            // Per-frame Vision confidence, threaded into smoothing below (finding #9b) so a
+            // barely-passing detection (just above PoseEstimator's flat minConfidence cutoff)
+            // doesn't get weighted identically to a confident one. Gap-filled/interpolated frames
+            // (the joint wasn't detected at all that frame) default to full weight (1.0) — interp
+            // already handles those gaps, so they shouldn't be double-penalized here too.
+            var c = [Double](repeating: 1.0, count: n)
             for (i, f) in pose.frames.enumerated() {
-                if let p = f.joints[j] { x[i] = p.x; y[i] = p.y }
+                if let p = f.joints[j] { x[i] = p.x; y[i] = p.y; c[i] = p.c }
             }
             JointSeries.interp(&x); JointSeries.interp(&y)
-            xs[j] = JointSeries.smooth(x); ys[j] = JointSeries.smooth(y)
+            xs[j] = JointSeries.smooth(x, weights: c); ys[j] = JointSeries.smooth(y, weights: c)
         }
     }
     func jx(_ j: Joint) -> [Double] { xs[j] ?? [Double](repeating: .nan, count: n) }
@@ -37,10 +45,17 @@ struct JointSeries {
         if let f = a.firstIndex(where: { !$0.isNaN }) { for k in 0..<f { a[k] = a[f] } }
         if let l = a.lastIndex(where: { !$0.isNaN }) { for k in (l+1)..<a.count { a[k] = a[l] } }
     }
-    static func smooth(_ a: [Double], _ win: Int = 3) -> [Double] {
+    /// `weights`, if provided, down-weights low-confidence samples in the moving average instead
+    /// of treating every in-window sample as equally trustworthy (finding #9b). Declared with
+    /// `win` still the second positional parameter and `weights` trailing/labeled, so every
+    /// existing unlabeled call site (`smooth(a)`, `smooth(a, win)`) keeps compiling unchanged.
+    static func smooth(_ a: [Double], _ win: Int = 3, weights: [Double]? = nil) -> [Double] {
         var o = a
         for i in 0..<a.count { var s = 0.0, c = 0.0
-            for k in max(0,i-win)...min(a.count-1,i+win) where !a[k].isNaN { s += a[k]; c += 1 }
+            for k in max(0,i-win)...min(a.count-1,i+win) where !a[k].isNaN {
+                let wt = weights?[k] ?? 1
+                s += a[k] * wt; c += wt
+            }
             o[i] = c > 0 ? s/c : a[i] }
         return o
     }
@@ -53,8 +68,15 @@ private func argmin(_ a: [Double], _ lo: Int, _ hi: Int) -> Int { var bi = lo, b
 
 public enum EventDetector {
     public static func detect(_ pose: PoseSequence, hand: Hand = .right) -> SwingEvents {
-        let s = JointSeries(pose); let n = s.n
-        let lead: Joint = hand == .left ? .rightWrist : .leftWrist
+        detect(JointSeries(pose), hand: hand)
+    }
+    /// JointSeries-accepting overload: lets a caller that already built a series for this pose
+    /// (e.g. SwingAnalyzer.analyze, which also feeds MetricsEngine/PlaneEngine from the same one)
+    /// skip rebuilding it — JointSeries.init does a per-joint interpolation + smoothing pass over
+    /// every frame, and was previously rebuilt 5-12x per swing/screen load for identical input.
+    static func detect(_ s: JointSeries, hand: Hand = .right) -> SwingEvents {
+        let n = s.n
+        let lead: Joint = hand.leadWrist
         let lwx = s.jx(lead), lwy = s.jy(lead)
         var speed = [Double](repeating: 0, count: n)
         for i in 1..<max(1, n) { let dx = (lwx[i]-lwx[i-1])*s.w, dy = (lwy[i]-lwy[i-1])*s.h; speed[i] = (dx*dx+dy*dy).squareRoot() }
@@ -73,9 +95,12 @@ public enum EventDetector {
 
 public enum MetricsEngine {
     public static func compute(_ pose: PoseSequence, events: SwingEvents, angle: Angle, hand: Hand = .right) -> SwingMetrics {
-        let s = JointSeries(pose)
+        compute(JointSeries(pose), events: events, angle: angle, hand: hand)
+    }
+    /// JointSeries-accepting overload — see EventDetector.detect's overload for why.
+    static func compute(_ s: JointSeries, events: SwingEvents, angle: Angle, hand: Hand = .right) -> SwingMetrics {
         let lead = hand == .left ? "right" : "left", trail = hand == .left ? "left" : "right"
-        func J(_ side: String, _ part: String) -> Joint { Joint(rawValue: side + part)! }
+        func J(_ side: String, _ part: String) -> Joint { Joint.bySideAndPart(side, part) }
         let a = events.address.frame, top = events.top.frame, imp = events.impact.frame
         var m = SwingMetrics()
 
@@ -119,7 +144,7 @@ public enum MetricsEngine {
             let d = (v1x*v2x+v1y*v2y) / ((v1x*v1x+v1y*v1y).squareRoot() * (v2x*v2x+v2y*v2y).squareRoot() + 1e-9)
             return acos(max(-1, min(1, d))) * 180 / .pi
         }
-        let fps = pose.fps > 0 ? pose.fps : 30
+        let fps = s.fps > 0 ? s.fps : 30
         let postImpact = min(imp + Int(0.12 * fps), s.n - 1)
         let laA = jointAngle(s.jx(J(lead, "Shoulder"))[postImpact], s.jy(J(lead, "Shoulder"))[postImpact], s.jx(J(lead, "Elbow"))[postImpact], s.jy(J(lead, "Elbow"))[postImpact], s.jx(J(lead, "Wrist"))[postImpact], s.jy(J(lead, "Wrist"))[postImpact])
         m.leadArmBendDeg = r1(max(0, 180 - laA))

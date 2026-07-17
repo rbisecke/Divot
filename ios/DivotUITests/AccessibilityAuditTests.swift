@@ -31,11 +31,17 @@ final class AccessibilityAuditTests: XCTestCase {
             }
         }
 
-        sleep(2)
+        UITestWait.navigationTitle(app, "Analyze")
         try audit()
         for tab in ["History", "Trends", "Compare", "Settings"] {
             app.tabBars.buttons[tab].tap()
-            sleep(2)
+            switch tab {
+            case "History": UITestWait.historyRows(app)
+            // "Metric" only renders once Trends' real content is ready (validated: a nav-title-only
+            // wait doesn't actually wait for anything, since the title renders before any data does).
+            case "Trends": UITestWait.element(app.staticTexts["Metric"])
+            default: UITestWait.navigationTitle(app, tab)
+            }
             try audit()
         }
 
@@ -43,8 +49,59 @@ final class AccessibilityAuditTests: XCTestCase {
         let myBag = app.descendants(matching: .any)["myBagLink"]
         if myBag.waitForExistence(timeout: 5) {
             myBag.tap()
-            sleep(2)
+            UITestWait.navigationTitle(app, "My Bag")
             try audit()
+        }
+
+        // History -> a seeded session's Results screen, then two screens the audit never
+        // structurally reached before (finding #14): the video player/scrubber, and the shot-data
+        // form sheet. Both had real VoiceOver gaps (unlabeled fields, an inaccessible scrubber)
+        // that this navigation is what actually catches.
+        app.tabBars.buttons["History"].tap()
+        let firstRow = app.cells.firstMatch
+        XCTAssertTrue(firstRow.waitForExistence(timeout: 10), "seeded History has at least one row")
+        firstRow.tap()
+        XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 10), "Results screen appears")
+        try audit()
+
+        let playLink = app.staticTexts["Play / slow-mo"]
+        if playLink.waitForExistence(timeout: 5) {
+            playLink.tap()
+            XCTAssertTrue(app.navigationBars["Playback"].waitForExistence(timeout: 10), "player screen appears")
+            try audit()
+            // The selected-rate trait round-trips: tapping a rate chip flips its .isSelected state
+            // (finding #14's "toggle chips convey state by color only" companion check).
+            let oneX = app.buttons["1× speed"]
+            if oneX.waitForExistence(timeout: 5) {
+                oneX.tap()
+                XCTAssertTrue(oneX.isSelected, "1x speed chip reports selected after tapping it")
+            }
+            app.navigationBars.buttons.firstMatch.tap()   // back to Results
+            XCTAssertTrue(firstRow.waitForExistence(timeout: 10) || app.navigationBars.firstMatch.waitForExistence(timeout: 10))
+        }
+
+        let addShot = app.buttons["Add"]
+        if addShot.waitForExistence(timeout: 5) {
+            addShot.tap()
+            XCTAssertTrue(app.navigationBars["Add shot data"].waitForExistence(timeout: 10), "shot data sheet appears")
+            try audit()
+            app.buttons["Cancel"].tap()
+            XCTAssertTrue(app.navigationBars.firstMatch.waitForExistence(timeout: 10))
+        }
+
+        // Plane & path's overlay-toggle chips round-trip the selected trait too (same
+        // color-only-state root cause as the rate chips above).
+        let planeLink = app.staticTexts["Plane & path (over-the-top)"]
+        if planeLink.waitForExistence(timeout: 5) {
+            planeLink.tap()
+            XCTAssertTrue(app.navigationBars["Plane & path"].waitForExistence(timeout: 10), "plane screen appears")
+            try audit()
+            let planeChip = app.buttons["Plane"]
+            if planeChip.waitForExistence(timeout: 5) {
+                let wasSelected = planeChip.isSelected
+                planeChip.tap()
+                XCTAssertNotEqual(planeChip.isSelected, wasSelected, "Plane chip's selected trait flips after tapping it")
+            }
         }
     }
 }

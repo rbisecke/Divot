@@ -3,8 +3,15 @@ import CoreGraphics
 
 // MARK: - Enums
 
-public enum Angle: String, Codable, Sendable { case faceOn = "face_on", dtl }
+public enum Angle: String, Codable, CaseIterable, Sendable { case faceOn = "face_on", dtl }
 public enum Hand: String, Codable, Sendable { case right = "R", left = "L" }
+
+public extension Hand {
+    /// The wrist that leads the swing (nearest the target at address) for this handedness —
+    /// consolidates what was previously copy-pasted separately in EventDetector.detect,
+    /// Segmenter.swings, and SwingLines.shaftPlane.
+    var leadWrist: Joint { self == .left ? .rightWrist : .leftWrist }
+}
 
 // ClubCategory + ClubSpec + Bag live in ClubModel.swift (S1 — open bag model).
 
@@ -13,6 +20,17 @@ public enum Joint: String, Codable, CaseIterable, Sendable {
     case nose, leftEye, rightEye, leftEar, rightEar, neck
     case leftShoulder, rightShoulder, leftElbow, rightElbow, leftWrist, rightWrist
     case leftHip, rightHip, leftKnee, rightKnee, leftAnkle, rightAnkle, root
+}
+
+public extension Joint {
+    /// Consolidates a force-unwrapped `Joint(rawValue: side + part)!` helper that was previously
+    /// copy-pasted in Analysis.swift, SwingLines.swift, and SequenceEngine.swift (Low-priority
+    /// finding) — safe today only because every call site happens to pass matching literals, with
+    /// no compile-time safety against a future typo. Falls back instead of crashing if the
+    /// combination doesn't name a real case.
+    static func bySideAndPart(_ side: String, _ part: String) -> Joint {
+        Joint(rawValue: side + part) ?? .leftWrist
+    }
 }
 
 /// Swing phases (subset of the 8 GolfDB events we compute).
@@ -72,17 +90,36 @@ public struct SwingMetrics: Codable, Sendable {
     public var trailKneeFlexLossDeg: Double?
     public init() {}
     public subscript(key: String) -> Double? {
-        switch key {
-        case "head_sway_in": return headSwayIn
-        case "head_rise_cm": return headRiseCm
-        case "spine_loss_deg": return spineLossDeg
-        case "pelvis_sway_in": return pelvisSwayIn
-        case "weight_lead_pct_est": return weightLeadPctEst
-        case "tempo_ratio": return tempoRatio
-        case "xfactor_deg": return xfactorDeg
-        case "lead_arm_bend_deg": return leadArmBendDeg
-        case "trail_knee_flex_loss_deg": return trailKneeFlexLossDeg
-        default: return nil
+        get {
+            switch key {
+            case "head_sway_in": return headSwayIn
+            case "head_rise_cm": return headRiseCm
+            case "spine_loss_deg": return spineLossDeg
+            case "pelvis_sway_in": return pelvisSwayIn
+            case "weight_lead_pct_est": return weightLeadPctEst
+            case "tempo_ratio": return tempoRatio
+            case "xfactor_deg": return xfactorDeg
+            case "lead_arm_bend_deg": return leadArmBendDeg
+            case "trail_knee_flex_loss_deg": return trailKneeFlexLossDeg
+            default: return nil
+            }
+        }
+        // Setter added for the [Faults synthetic] golden-check bracket, which constructs a
+        // SwingMetrics driven entirely by FaultEvaluator.benchmarks(category:)'s public key
+        // strings rather than hardcoding a field per metric.
+        set {
+            switch key {
+            case "head_sway_in": headSwayIn = newValue
+            case "head_rise_cm": headRiseCm = newValue
+            case "spine_loss_deg": spineLossDeg = newValue
+            case "pelvis_sway_in": pelvisSwayIn = newValue
+            case "weight_lead_pct_est": weightLeadPctEst = newValue
+            case "tempo_ratio": tempoRatio = newValue
+            case "xfactor_deg": xfactorDeg = newValue
+            case "lead_arm_bend_deg": leadArmBendDeg = newValue
+            case "trail_knee_flex_loss_deg": trailKneeFlexLossDeg = newValue
+            default: break
+            }
         }
     }
 }

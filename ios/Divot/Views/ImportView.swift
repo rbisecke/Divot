@@ -153,6 +153,10 @@ struct ImportView: View {
             let events = EventDetector.detect(pose)
             return AngleDetector.detect(pose, events: events)
         }.value
+        // Picking a second clip before this detection finishes could otherwise let its stale
+        // result overwrite state for the now-current selection (Medium finding) — tagged with the
+        // URL it targets, so a mismatched (superseded) result is discarded instead of applied.
+        guard pickedURL == url else { return }
         guard let detection, let applied = AngleSelection.apply(detection: detection) else { return }
         angleRaw = applied.angle.rawValue
         detectedNote = applied.note
@@ -169,7 +173,14 @@ struct ImportView: View {
         let saved = SavedSession(date: Date(), club: club, angle: angle.wrappedValue,
                                  hand: hand, videoFilename: filename, session: session)
         context.insert(saved)
-        try? context.save()
+        do { try context.save() }
+        catch {
+            // Reuses AnalysisStore's existing error surface (Medium finding: this write silently
+            // swallowed a persistence failure, so the UI showed success even when the just-run
+            // analysis was never actually saved).
+            store.error = "Couldn't save the analysis: \(error.localizedDescription)"
+            return
+        }
         pickedURL = nil
         pickedItem = nil
         navSession = saved

@@ -52,6 +52,9 @@ struct GhostCompareView: View {
                                     .background(on ? Color.accentColor : Color.gray.opacity(0.2), in: Capsule())
                                     .foregroundStyle(on ? .white : .primary)
                             }
+                            // Chip conveyed on/off purely by color; VoiceOver announced the same
+                            // label regardless of state (Medium finding).
+                            .accessibilityAddTraits(on ? .isSelected : [])
                         }
                     }
                     .padding(.horizontal)
@@ -74,7 +77,7 @@ struct GhostCompareView: View {
 
     private func load() async {
         guard let session = saved.session else { loading = false; return }
-        let snaps = await FrameExtractor.snapshots(videoURL: saved.videoURL, session: session, swing: swing)
+        let snaps = await FrameExtractor.snapshots(videoURL: saved.videoURL, cacheURL: saved.poseCacheURL, session: session, swing: swing)
         snapshots = snaps
         loading = false
     }

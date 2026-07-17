@@ -6,12 +6,21 @@ import SwingCore
 // Add checks per stage; exits non-zero on any failure so it gates commits.
 
 var failures = 0
+var total = 0
+var skippedSections: [String] = []
 func check(_ cond: Bool, _ msg: String) {
+    total += 1
     if cond { print("  ✓ \(msg)") } else { print("  ✗ FAIL: \(msg)"); failures += 1 }
 }
 func approx(_ a: Double?, _ b: Double, _ tol: Double, _ msg: String) {
-    guard let a = a else { print("  ✗ FAIL: \(msg) (nil)"); failures += 1; return }
+    guard let a = a else { check(false, "\(msg) (nil)"); return }
     check(abs(a - b) <= tol, "\(msg) (\(a) ≈ \(b) ±\(tol))")
+}
+// Records a whole section as skipped (fixture absent) so the end-of-run summary shows what
+// didn't run, instead of that only being discoverable by scrolling the full log.
+func skip(_ section: String, _ reason: String) {
+    skippedSections.append(section)
+    print("  ⊘ \(reason)")
 }
 
 // One-off recorder: SWINGCORE_RECORD_POSE=<out.json> SWINGCORE_RECORD_SRC=<clip.mov>
@@ -52,7 +61,7 @@ do {
     let data = try JSONEncoder().encode(pwSpec)
     let back = try JSONDecoder().decode(ClubSpec.self, from: data)
     check(back == pwSpec, "ClubSpec Codable round-trip (id/category/loft/label)")
-} catch { print("  ✗ FAIL: ClubSpec Codable threw \(error)"); failures += 1 }
+} catch { print("  ✗ FAIL: ClubSpec Codable threw \(error)"); failures += 1; total += 1 }
 // Legacy tolerance: a pre-ClubSpec Session stored its club as a bare string ("7i","pw").
 // Decoding that JSON must map through ClubLegacy so old persisted sessions still open.
 do {
@@ -64,7 +73,7 @@ do {
     let legacySessionJSON = "{\"id\":\"00000000-0000-0000-0000-000000000000\",\"date\":0,\"club\":\"3w\",\"angle\":\"face_on\",\"hand\":\"R\",\"swings\":[]}"
     let s = try JSONDecoder().decode(Session.self, from: Data(legacySessionJSON.utf8))
     check(s.club.category == .wood && s.club.number == 3, "legacy Session blob with string club decodes (3w → wood 3)")
-} catch { print("  ✗ FAIL: legacy club decode threw \(error)"); failures += 1 }
+} catch { print("  ✗ FAIL: legacy club decode threw \(error)"); failures += 1; total += 1 }
 // sortKey orders Driver → woods → hybrid → irons → wedges(46→58)
 let sortedNames = Bag.sorted(Bag.defaultBag).map { $0.displayName }
 check(sortedNames == ["Driver","3W","5H","6i","7i","8i","9i","PW","50°","54°","58°"],
@@ -133,14 +142,22 @@ do {
     let data = try JSONEncoder().encode(mm)
     let back = try JSONDecoder().decode(SwingMetrics.self, from: data)
     check(back.headRiseCm == -6.4 && back.leadArmBendDeg == 24.6, "SwingMetrics Codable round-trip")
-} catch { print("  ✗ FAIL: Codable threw \(error)"); failures += 1 }
+} catch { print("  ✗ FAIL: Codable threw \(error)"); failures += 1; total += 1 }
+
+// Joint.bySideAndPart consolidates a force-unwrapped helper previously copy-pasted in
+// Analysis.swift/SwingLines.swift/SequenceEngine.swift (Low-priority finding).
+check(Joint.bySideAndPart("left", "Wrist") == .leftWrist, "valid combination resolves correctly")
+check(Joint.bySideAndPart("right", "Ankle") == .rightAnkle, "valid combination resolves correctly (2)")
+check(Joint.bySideAndPart("bogus", "Nonsense") == .leftWrist, "invalid combination falls back instead of crashing")
 
 // [S1] Pose — integration check against a real clip (CLI oracle: 126 frames, all detected).
 // Skips gracefully if the clip isn't present (keeps the harness portable).
 print("[Pose]")
+// No repo-committed fallback: a real swing clip can't be committed (privacy hard rule), so this
+// section only runs when a developer points SWINGCORE_TEST_CLIP at one locally. CI/clean clones
+// skip it by design — see claude_docs/code-review-findings.md #1.
 let clipPath = ProcessInfo.processInfo.environment["SWINGCORE_TEST_CLIP"]
-    ?? "/Users/rbisecke/Downloads/golf_vids/auto/swing_1.mov"
-if FileManager.default.fileExists(atPath: clipPath) {
+if let clipPath, FileManager.default.fileExists(atPath: clipPath) {
     do {
         let seq = try PoseEstimator.pose(video: URL(fileURLWithPath: clipPath), fps: 30)
         check(seq.frames.count >= 120 && seq.frames.count <= 132, "pose sampled ~126 frames (got \(seq.frames.count))")
@@ -219,10 +236,10 @@ if FileManager.default.fileExists(atPath: clipPath) {
 
         // [S3.5] End-to-end facade: analyze(video:) and analyzeSession(video:).
         print("[Pipeline]")
-        let one = SwingAnalyzer.analyze(seq, club: pwSpec, angle: .faceOn)
+        let one = try SwingAnalyzer.analyze(seq, club: pwSpec, angle: .faceOn)
         check(one.faults.count >= 1 && one.comparison != nil, "analyze() yields faults + comparison")
         check(one.events.impact.frame == ev.impact.frame, "facade events match direct EventDetector")
-        let sessionSwings = SwingAnalyzer.analyze(seq, club: pwSpec, angle: .faceOn, index: 1)
+        let sessionSwings = try SwingAnalyzer.analyze(seq, club: pwSpec, angle: .faceOn, index: 1)
         let st = SessionBuilder.stats([sessionSwings])
         check(st.bestSwing == 1, "single-swing session best == 1")
         check(st.focus != "keep grooving contact", "focus names the dominant fault (\(st.focus))")
@@ -283,17 +300,17 @@ if FileManager.default.fileExists(atPath: clipPath) {
         check(ed.angle == .faceOn && ed.confidence == 0, "empty pose → default face-on, confidence 0")
 
         // [P1.6] AngleDetector — down-the-line fixture ground truth (the other class).
+        // No repo fallback (real clip, un-committable) — set SWINGCORE_TEST_DTL_CLIP locally to run this.
         let dtlPath = ProcessInfo.processInfo.environment["SWINGCORE_TEST_DTL_CLIP"]
-            ?? "/Users/rbisecke/workspace/golfing/swing-analyzer/ios/GolfSwingAnalyzerTests/Fixtures/sample_swing_dtl.mov"
-        if FileManager.default.fileExists(atPath: dtlPath) {
+        if let dtlPath, FileManager.default.fileExists(atPath: dtlPath) {
             do {
                 let dseq = try PoseEstimator.pose(video: URL(fileURLWithPath: dtlPath), fps: 30)
                 let ddet = AngleDetector.detect(dseq, events: EventDetector.detect(dseq))
                 check(ddet.angle == .dtl,
                       "classifies DTL fixture as down-the-line (got \(ddet.angle.rawValue), conf \(String(format:"%.2f", ddet.confidence)))")
-            } catch { print("  ✗ FAIL: DTL pose threw \(error)"); failures += 1 }
+            } catch { print("  ✗ FAIL: DTL pose threw \(error)"); failures += 1; total += 1 }
         } else {
-            print("  ⊘ DTL fixture absent (skipped)")
+            skip("AngleDetector.dtl", "DTL fixture absent (set SWINGCORE_TEST_DTL_CLIP to enable)")
         }
 
         // [P2.4] SequenceEngine + [P2.3] headTravelCm + [P2.1] auto-trim (clip-dependent).
@@ -309,10 +326,166 @@ if FileManager.default.fileExists(atPath: clipPath) {
         if let win = Segmenter.swings(in: seq, max: 1).first {
             check(ev.impact.t >= win.start && ev.impact.t <= win.end, "auto-trim window contains impact")
         } else { check(false, "segmenter returns a window") }
-    } catch { print("  ✗ FAIL: pose threw \(error)"); failures += 1 }
+    } catch { print("  ✗ FAIL: pose threw \(error)"); failures += 1; total += 1 }
 } else {
-    print("  ⊘ skipped (no test clip at \(clipPath))")
+    skip("Pose+Segment+Events+Metrics+Faults+Reference+Template+Comparator+Pipeline+Benchmarks+SwingLines+AngleDetector+P2clip",
+         "no test clip (set SWINGCORE_TEST_CLIP to enable)")
 }
+
+// [Pipeline degenerate] — SwingAnalyzer.analyze(_ pose:) guards, no clip needed (findings #2, #6).
+print("[Pipeline degenerate]")
+let empty0 = PoseSequence(fps: 30, width: 1080, height: 1920, frames: [])
+do { _ = try SwingAnalyzer.analyze(empty0, club: pwSpec, angle: .faceOn); check(false, "0-frame pose should throw") }
+catch SwingError.noSwingDetected { check(true, "0-frame pose throws noSwingDetected") }
+catch { check(false, "0-frame pose threw wrong error: \(error)") }
+
+let oneFrame = PoseSequence(fps: 30, width: 1080, height: 1920, frames: [PoseFrame(t: 0, joints: [:])])
+do { _ = try SwingAnalyzer.analyze(oneFrame, club: pwSpec, angle: .faceOn); check(false, "1-frame pose should throw") }
+catch SwingError.noSwingDetected { check(true, "1-frame pose throws noSwingDetected") }
+catch { check(false, "1-frame pose threw wrong error: \(error)") }
+
+// finding #6 — lead wrist never detected across an otherwise-plausible clip (occluded/out of
+// frame/bad angle): every other joint is present in every frame, only the lead wrist is missing.
+func noWristPose() -> PoseSequence {
+    var frames: [PoseFrame] = []
+    for i in 0..<20 {
+        frames.append(PoseFrame(t: Double(i)/30, joints: [
+            .leftShoulder: JointPoint(x: 0.42, y: 0.75, c: 1), .rightShoulder: JointPoint(x: 0.58, y: 0.75, c: 1),
+            .leftHip: JointPoint(x: 0.45, y: 0.55, c: 1), .rightHip: JointPoint(x: 0.55, y: 0.55, c: 1),
+        ]))  // leftWrist deliberately absent in every frame
+    }
+    return PoseSequence(fps: 30, width: 1000, height: 1000, frames: frames)
+}
+do { _ = try SwingAnalyzer.analyze(noWristPose(), club: pwSpec, angle: .faceOn); check(false, "fully-undetected lead wrist should throw") }
+catch SwingError.lowPoseConfidence { check(true, "fully-undetected lead wrist throws lowPoseConfidence") }
+catch { check(false, "wrong error for undetected wrist: \(error)") }
+
+// [AngleDetector synthetic] — degenerate-geometry and partial-joint-missing branches, no clip needed.
+print("[AngleDetector synthetic]")
+let zEv = SwingEvent(t: 0, frame: 0)
+let adEvents = SwingEvents(address: zEv, top: zEv, impact: zEv, finish: zEv)
+func adFrame(_ joints: [Joint: JointPoint]) -> PoseSequence {
+    PoseSequence(fps: 30, width: 1000, height: 1000, frames: [PoseFrame(t: 0, joints: joints)])
+}
+// Coincident shoulders/hips ⇒ torsoH <= 1 (degenerate geometry) ⇒ default face-on, confidence 0.
+let coincident = adFrame([
+    .leftShoulder: JointPoint(x: 0.5, y: 0.5, c: 1), .rightShoulder: JointPoint(x: 0.5, y: 0.5, c: 1),
+    .leftHip: JointPoint(x: 0.5, y: 0.5, c: 1), .rightHip: JointPoint(x: 0.5, y: 0.5, c: 1),
+])
+let degenerateDet = AngleDetector.detect(coincident, events: adEvents)
+check(degenerateDet.angle == .faceOn && degenerateDet.confidence == 0, "degenerate geometry (torsoH <= 1) ⇒ face-on, confidence 0")
+// Hips entirely undetected ⇒ mid(leftHip,rightHip) is nil ⇒ same default, no crash.
+let noHips = adFrame([.leftShoulder: JointPoint(x: 0.4, y: 0.7, c: 1), .rightShoulder: JointPoint(x: 0.6, y: 0.7, c: 1)])
+let noHipsDet = AngleDetector.detect(noHips, events: adEvents)
+check(noHipsDet.angle == .faceOn && noHipsDet.confidence == 0, "hips entirely undetected ⇒ face-on, confidence 0, no crash")
+
+// [PoseEstimator error path] — a nonexistent file must throw unreadableVideo carrying the URL,
+// not crash or hang. No clip needed (the path is deliberately bogus).
+print("[PoseEstimator error path]")
+let bogusVideoURL = URL(fileURLWithPath: "/nonexistent/\(UUID().uuidString).mov")
+do {
+    _ = try PoseEstimator.pose(video: bogusVideoURL)
+    check(false, "nonexistent video should throw")
+} catch SwingError.unreadableVideo(let u) {
+    check(u == bogusVideoURL, "nonexistent video throws unreadableVideo carrying the offending URL")
+} catch {
+    check(false, "nonexistent video threw the wrong error: \(error)")
+}
+
+// [Segmenter synthetic] — Segmenter.swings(in:) with a synthetic multi-swing clip, no real clip
+// needed. Builds a lead-wrist speed series with sharp bursts at chosen times (flat baseline, then
+// a brief fast excursion and back) and confirms swings collapse/separate the way minSep intends.
+print("[Segmenter synthetic]")
+func burstPose(burstTimes: [Double], duration: Double, fps: Double = 30) -> PoseSequence {
+    let n = Int(duration * fps)
+    var frames: [PoseFrame] = []
+    for i in 0..<n {
+        let t = Double(i) / fps
+        // Default resting position; near any burst time, sweep x rapidly across a wide span.
+        var x = 0.3
+        for bt in burstTimes {
+            let dt = t - bt
+            if abs(dt) < 0.2 { x = 0.3 + 0.4 * (dt / 0.2) }   // fast sweep across +/-0.2s window
+        }
+        frames.append(PoseFrame(t: t, joints: [
+            .leftWrist: JointPoint(x: x, y: 0.5, c: 1),
+            .leftShoulder: JointPoint(x: 0.42, y: 0.7, c: 1), .rightShoulder: JointPoint(x: 0.58, y: 0.7, c: 1),
+            .leftHip: JointPoint(x: 0.45, y: 0.5, c: 1), .rightHip: JointPoint(x: 0.55, y: 0.5, c: 1),
+        ]))
+    }
+    return PoseSequence(fps: fps, width: 1000, height: 1000, frames: frames)
+}
+// Two bursts 4s apart (well outside the default 3.0s minSep) ⇒ 2 separate windows, in time order.
+let farApart = burstPose(burstTimes: [3.0, 7.0], duration: 12)
+let farWindows = Segmenter.swings(in: farApart, max: 5)
+check(farWindows.count == 2, "two bursts 4s apart ⇒ 2 windows (got \(farWindows.count))")
+if farWindows.count == 2 {
+    check(farWindows[0].impact < farWindows[1].impact, "windows are in time order")
+    check(abs(farWindows[0].impact - 3.0) < 0.5 && abs(farWindows[1].impact - 7.0) < 0.5, "impacts land near the two burst times")
+}
+// Two bursts 1s apart (inside the default 3.0s minSep) ⇒ collapse to 1 window.
+let closeTogether = burstPose(burstTimes: [5.0, 6.0], duration: 12)
+let closeWindows = Segmenter.swings(in: closeTogether, max: 5)
+check(closeWindows.count == 1, "two bursts 1s apart (< minSep) ⇒ collapse to 1 window (got \(closeWindows.count))")
+
+// Faults.swift threshold/severity math — previously only exercised incidentally via one golden
+// fixture (Medium finding). Driven from FaultEvaluator.benchmarks(category:) itself (the public
+// mirror of the internal Benchmarks.defaults/MetricDef this module can't reach directly) rather
+// than hardcoded numbers, so the test can't silently drift from the real thresholds.
+print("[Faults synthetic]")
+// .iron has no entry in Benchmarks.overrides, so this is pure Benchmarks.defaults for every metric.
+for info in FaultEvaluator.benchmarks(category: .iron) {
+    let span = max(abs(info.fault - info.good), 0.1)
+    func metrics(_ v: Double) -> SwingMetrics { var m = SwingMetrics(); m[info.key] = v; return m }
+    // A metric outside its benchmark's angle family must never fire, regardless of value.
+    let allAngles = Set(Angle.allCases)
+    let offAngles = info.angles.map { allAngles.subtracting($0) } ?? []
+    // Any angle within the metric's own family fires identically (angle only gates which
+    // benchmarks apply, not the threshold math) — trail_knee_flex_loss_deg's family is DTL-only,
+    // so a hardcoded .faceOn would never fire for it regardless of value.
+    let validAngle = info.angles?.first ?? .faceOn
+
+    if info.higherIsBetter {
+        // direction .min: fires when v < fault; "just/far past" means further below fault.
+        let atFault = FaultEvaluator.evaluate(metrics(info.fault), category: .iron, angle: validAngle)
+        check(!atFault.contains { $0.code == info.faultCode }, "\(info.key): v == fault must not fire (strict <)")
+        let justPast = FaultEvaluator.evaluate(metrics(info.fault - span * 0.1), category: .iron, angle: validAngle)
+        if let f = justPast.first(where: { $0.code == info.faultCode }) {
+            check(f.severity > 0 && f.severity <= 1, "\(info.key): just past fault fires, severity in (0,1] (got \(f.severity))")
+        } else { check(false, "\(info.key): just past fault (below) should fire") }
+        let farPast = FaultEvaluator.evaluate(metrics(info.fault - span * 10), category: .iron, angle: validAngle)
+        if let f = farPast.first(where: { $0.code == info.faultCode }) {
+            check(f.severity == 1.0, "\(info.key): far past fault clamps severity to 1.0 (got \(f.severity))")
+        } else { check(false, "\(info.key): far past fault (below) should fire") }
+    } else {
+        // direction .max: fires when v > fault; "just/far past" means further above fault.
+        let atFault = FaultEvaluator.evaluate(metrics(info.fault), category: .iron, angle: validAngle)
+        check(!atFault.contains { $0.code == info.faultCode }, "\(info.key): v == fault must not fire (strict >)")
+        let justPast = FaultEvaluator.evaluate(metrics(info.fault + span * 0.1), category: .iron, angle: validAngle)
+        if let f = justPast.first(where: { $0.code == info.faultCode }) {
+            check(f.severity > 0 && f.severity <= 1, "\(info.key): just past fault fires, severity in (0,1] (got \(f.severity))")
+        } else { check(false, "\(info.key): just past fault (above) should fire") }
+        let farPast = FaultEvaluator.evaluate(metrics(info.fault + span * 10), category: .iron, angle: validAngle)
+        if let f = farPast.first(where: { $0.code == info.faultCode }) {
+            check(f.severity == 1.0, "\(info.key): far past fault clamps severity to 1.0 (got \(f.severity))")
+        } else { check(false, "\(info.key): far past fault (above) should fire") }
+    }
+
+    // Wrong angle family never fires, however far past the threshold.
+    let extremeValue = info.higherIsBetter ? info.fault - span * 10 : info.fault + span * 10
+    for off in offAngles {
+        let firedWrongAngle = FaultEvaluator.evaluate(metrics(extremeValue), category: .iron, angle: off)
+        check(!firedWrongAngle.contains { $0.code == info.faultCode }, "\(info.key): never fires for \(off.rawValue) (wrong angle family)")
+    }
+}
+// Override application: weight_lead_pct_est at 62 must not fire hanging_back under .driver's
+// override (good 60/fault 50, direction .min ⇒ fires only below 50) but must fire under .wedge's
+// default-derived override (good 85/fault 75 ⇒ fires below 75).
+var wOv = SwingMetrics(); wOv.weightLeadPctEst = 62
+let driverFaults = FaultEvaluator.evaluate(wOv, category: .driver, angle: .faceOn)
+check(!driverFaults.contains { $0.code == "hanging_back" }, "weight_lead_pct_est 62 ⇒ no hanging_back under .driver override (60/50)")
+let wedgeFaults = FaultEvaluator.evaluate(wOv, category: .wedge, angle: .faceOn)
+check(wedgeFaults.contains { $0.code == "hanging_back" }, "weight_lead_pct_est 62 ⇒ hanging_back fires under .wedge override (85/75)")
 
 // [P1.5] Trends — pure aggregation over synthetic sessions (no clip needed).
 print("[Trends]")
@@ -336,6 +509,17 @@ let rm = Trends.rollingMean(ser, window: 2)
 check(abs((rm.last?.value ?? 0) - 4.0) < 1e-9, "rolling mean of [5,3] w2 last == 4.0")
 check(Trends.series(sess, metric: "head_sway_in", clubID: nil).count == 3, "no id filter → all 3 sessions")
 check(Trends.series(sess, metric: "head_sway_in", category: .wedge).count == 2, "category filter → 2 wedge sessions")
+// Test-coverage gap: a NaN metric value must be filtered out of the series, not passed through
+// as a garbage point.
+let sessWithNaN = sess + [mkSession(4, trendPW, .nan)]
+let serWithNaN = Trends.series(sessWithNaN, metric: "head_sway_in", clubID: trendPW.id)
+check(serWithNaN.count == 2 && serWithNaN.allSatisfy { $0.value.isFinite }, "NaN metric value filtered out of the series (got \(serWithNaN.count) points)")
+// Test-coverage gap: rollingMean's window must clamp to >= 1, not crash on 0 or negative.
+let rmZero = Trends.rollingMean(ser, window: 0)
+check(rmZero.count == ser.count && rmZero.allSatisfy { $0.value.isFinite }, "rollingMean(window: 0) clamps to 1, no crash")
+let rmNegative = Trends.rollingMean(ser, window: -5)
+check(rmNegative.count == ser.count && rmNegative.allSatisfy { $0.value.isFinite }, "rollingMean(window: -5) clamps to 1, no crash")
+check(rmZero.map(\.value) == rmNegative.map(\.value), "window 0 and negative window clamp identically")
 
 // [P1.8] ReportBuilder — deterministic Markdown summary.
 print("[Report]")
@@ -350,6 +534,12 @@ let md = ReportBuilder.markdown(rsession)
 check(md.contains("PW"), "report contains club displayName")
 check(!rfaults.isEmpty && md.contains(rfaults[0].code), "report contains top fault code (\(rfaults.first?.code ?? "none"))")
 check(md.contains("3.0 : 1"), "report contains tempo value")
+// Test-coverage gap: an empty swings array still renders the header/club line and the explicit
+// no-swing-detected fallback text, not a crash from bestSwing()'s empty-collection .min().
+let noSwingSession = Session(date: Date(timeIntervalSince1970: 0), club: pwSpec, angle: .faceOn, hand: .right,
+                             swings: [], stats: nil)
+let noSwingMd = ReportBuilder.markdown(noSwingSession)
+check(noSwingMd.contains("PW") && noSwingMd.contains("No swing detected."), "no-swing session still renders header + fallback text")
 
 // [P2.1] FramingGuide — pure, no clip needed.
 print("[FramingGuide]")
@@ -367,6 +557,21 @@ var noAnkle = fullBody(); noAnkle[.leftAnkle] = nil
 check(!FramingGuide.inFrame(noAnkle).ok, "missing ankle ⇒ not ok")
 var edge = fullBody(); edge[.rightShoulder] = JointPoint(x: 0.995, y: 0.75, c: 1)
 check(!FramingGuide.inFrame(edge).ok, "joint at edge ⇒ not ok")
+// Test-coverage gap: extent-ratio bounds (head-to-ankle span relative to frame) and the no-head
+// branch. fullBody()'s own extent is nose.y(0.90) - ankleY(0.15) = 0.75, comfortably mid-range.
+func withExtent(_ extent: Double) -> [Joint: JointPoint] {
+    var j = fullBody()
+    j[.nose] = JointPoint(x: 0.5, y: 0.15 + extent, c: 1)   // ankles stay at y=0.15
+    return j
+}
+check(FramingGuide.inFrame(withExtent(0.30)).reason == "Step closer — you're too small in frame",
+      "extent 0.30 (< 0.45) ⇒ the specific too-small message")
+check(FramingGuide.inFrame(withExtent(0.98)).reason == "Step back — you're too close",
+      "extent 0.98 (> 0.97) ⇒ the specific too-close message")
+check(FramingGuide.inFrame(withExtent(0.70)).ok, "extent 0.70 (mid-range) ⇒ ok")
+var noHead = fullBody(); noHead[.nose] = nil; noHead[.leftEar] = nil; noHead[.rightEar] = nil
+let noHeadResult = FramingGuide.inFrame(noHead)
+check(!noHeadResult.ok && noHeadResult.reason == "Get your head in frame", "no nose/ear at all ⇒ the specific no-head message")
 
 // [C6] dtlInFrame — side-on detection.
 func sideOn() -> [Joint: JointPoint] {
@@ -389,6 +594,25 @@ if let w = MotionTrigger.swingWindow(leadWristSpeed: burst, fps: 30) {
 } else { check(false, "burst series ⇒ a window") }
 check(MotionTrigger.swingWindow(leadWristSpeed: [Double](repeating: 1.0, count: 40), fps: 30) == nil, "flat series ⇒ nil")
 
+// Medium finding — a brief noise dip inside an otherwise-wide, clean burst must not truncate
+// the window early. preRoll/postRoll zeroed so the check observes the raw start/end boundary
+// directly, not padding that would mask a truncation either way.
+//
+// swingWindow smooths with a fixed +/-2 boxcar (JointSeries.smooth(_, 2)) before thresholding,
+// so a single raw sample anomaly always blurs into a uniform 5-wide dip in the smoothed series —
+// too wide to distinguish a hysteresis fix from the old single-sample check. A 5-raw-sample dip
+// (matching the smoothing window) convolves to a *single* smoothed index dipping just below
+// threshold, with its immediate neighbors staying clearly above — a faithful, minimal stand-in
+// for "a brief noise dip mid-swing" that only a debounce can see through.
+// Generous baseline padding keeps the series mean well below the riseFactor gate (peakV must
+// exceed mean * 3) despite the burst itself being fairly wide.
+var dipBurst = [Double](repeating: 0.2, count: 250)
+for i in 100...134 { dipBurst[i] = 5.0 }
+for i in 114...118 { dipBurst[i] = 0.8 }   // dips the single smoothed index 116 to 0.8 (thresh 1.25)
+if let dw = MotionTrigger.swingWindow(leadWristSpeed: dipBurst, fps: 30, preRoll: 0, postRoll: 0) {
+    check(dw.endIdx >= 125, "brief dip doesn't truncate the window early (endIdx \(dw.endIdx), burst runs to 134)")
+} else { check(false, "dip burst ⇒ a window") }
+
 // [P2.2] EventAlignment — pure.
 print("[EventAlignment]")
 let ea = SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 1.0, frame: 30),
@@ -398,6 +622,29 @@ let eb = SwingEvents(address: SwingEvent(t: 2.0, frame: 0), top: SwingEvent(t: 3
 check(abs(EventAlignment.mapTime(1.5, from: ea, to: eb) - 3.4) < 1e-9, "A.impact maps exactly to B.impact")
 check(abs(EventAlignment.mapTime(0.5, from: ea, to: eb) - 2.5) < 1e-9, "midpoint address→top interpolates")
 check(EventAlignment.mapTime(-1, from: ea, to: eb) == 2.0 && EventAlignment.mapTime(9, from: ea, to: eb) == 5.0, "clamps to B endpoints")
+// Test-coverage gap: two adjacent events sharing a timestamp must never produce NaN/crash from a
+// 0/0 division. mapTime's own `denom > 0 ? ... : 0` ternary turns out to be unreachable dead code
+// given the function's structure (each interval's shared boundary point is always claimed first by
+// whichever earlier, non-degenerate interval reaches it, or is excluded by the `t <= ax[0]`/
+// `t >= ax[3]` guards when the degenerate pair sits at either end) — verified by tracing every
+// case by hand. So instead of trying to force that specific line, this checks the guarantee that
+// actually matters to a caller: mapTime stays finite and reasonable across several
+// degenerate-adjacent-event shapes (top==impact; address==top; address==top==impact).
+let degenerateShapes: [(String, SwingEvents)] = [
+    ("top==impact", SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 1.0, frame: 30),
+                                impact: SwingEvent(t: 1.0, frame: 30), finish: SwingEvent(t: 3.0, frame: 90))),
+    ("address==top", SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 0, frame: 0),
+                                 impact: SwingEvent(t: 1.5, frame: 45), finish: SwingEvent(t: 3.0, frame: 90))),
+    ("address==top==impact", SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 0, frame: 0),
+                                         impact: SwingEvent(t: 0, frame: 0), finish: SwingEvent(t: 3.0, frame: 90))),
+]
+for (name, degenerate) in degenerateShapes {
+    var allFinite = true
+    for t in stride(from: -0.5, through: 3.5, by: 0.25) {
+        if !EventAlignment.mapTime(t, from: degenerate, to: eb).isFinite { allFinite = false; break }
+    }
+    check(allFinite, "\(name): mapTime stays finite across the whole domain, no crash/NaN")
+}
 
 // [P2.5] HapticBeats — pure.
 print("[HapticBeats]")
@@ -432,11 +679,49 @@ check(inOrder.inSequence, "pelvis→torso→arm→hand ⇒ inSequence true")
 let reversed = SequenceEngine.compute(seqPose(pelvis: 8, torso: 6, arm: 4, hand: 2), events: seqEvents)
 check(!reversed.inSequence, "reversed order ⇒ inSequence false")
 
+// hand: .left was completely untested end to end before (compounding finding #7) — SequenceEngine
+// reads the *trail*-side arm/hand joints for a lefty (.rightElbow/.rightWrist), mirroring seqPose's
+// right-handed fixture onto the right side instead of the left.
+func seqPoseLeft(pelvis: Int, torso: Int, arm: Int, hand: Int) -> PoseSequence {
+    func off(_ i: Int, _ f: Int) -> Double { i >= f ? 0.10 : 0 }
+    var frames: [PoseFrame] = []
+    for i in 0..<10 {
+        func p(_ x: Double, _ y: Double) -> JointPoint { JointPoint(x: x, y: y, c: 1) }
+        let j: [Joint: JointPoint] = [
+            .leftHip: p(0.45, 0.50), .rightHip: p(0.55, 0.50 + off(i, pelvis)),
+            .leftShoulder: p(0.42, 0.68), .rightShoulder: p(0.58, 0.68 + off(i, torso)),
+            .rightElbow: p(0.60 + off(i, arm), 0.58),
+            .rightWrist: p(0.56 + off(i, arm) - off(i, hand), 0.50),
+        ]
+        frames.append(PoseFrame(t: Double(i) / 30.0, joints: j))
+    }
+    return PoseSequence(fps: 30, width: 1000, height: 1000, frames: frames)
+}
+let inOrderLeft = SequenceEngine.compute(seqPoseLeft(pelvis: 2, torso: 4, arm: 6, hand: 8), events: seqEvents, hand: .left)
+check(inOrderLeft.inSequence, "hand: .left pelvis→torso→arm→hand ⇒ inSequence true")
+let reversedLeft = SequenceEngine.compute(seqPoseLeft(pelvis: 8, torso: 6, arm: 4, hand: 2), events: seqEvents, hand: .left)
+check(!reversedLeft.inSequence, "hand: .left reversed order ⇒ inSequence false")
+
+// Test-coverage gaps: n<3 guard, and hi/lo clamping when events sit at/past the sequence end.
+let tinyPose0 = PoseSequence(fps: 30, width: 1000, height: 1000, frames: [])
+let tinyResult0 = SequenceEngine.compute(tinyPose0, events: seqEvents)
+check(tinyResult0.order.isEmpty && tinyResult0.peakTimes.isEmpty && !tinyResult0.inSequence, "n=0 ⇒ empty/false, no crash")
+let tinyPose2 = PoseSequence(fps: 30, width: 1000, height: 1000,
+                             frames: [PoseFrame(t: 0, joints: [:]), PoseFrame(t: 1/30, joints: [:])])
+let tinyResult2 = SequenceEngine.compute(tinyPose2, events: seqEvents)
+check(tinyResult2.order.isEmpty && tinyResult2.peakTimes.isEmpty && !tinyResult2.inSequence, "n=2 (< 3) ⇒ empty/false, no crash")
+// impact.frame beyond the sequence's last index must clamp hi to n-1, not index out of range.
+let clampEvents = SwingEvents(address: SwingEvent(t: 0, frame: 0), top: SwingEvent(t: 1/30, frame: 1),
+                              impact: SwingEvent(t: 100, frame: 500), finish: SwingEvent(t: 100, frame: 500))
+let clamped = SequenceEngine.compute(seqPose(pelvis: 2, torso: 4, arm: 6, hand: 8), events: clampEvents)
+check(clamped.peakTimes.count == 4, "impact.frame past sequence end still clamps and computes 4 peaks, no crash")
+
 // [P3.1] MLM2PRO CSV parser — golden check against a committed fixture.
+// validate.sh exports SWINGCORE_TEST_CSV at the repo's own ios/DivotTests/Fixtures/sample_shots.csv
+// by default, so this runs in CI/on a clean clone with no manual setup.
 print("[MLM2ProCSV]")
 let csvPath = ProcessInfo.processInfo.environment["SWINGCORE_TEST_CSV"]
-    ?? "/Users/rbisecke/workspace/golfing/swing-analyzer/ios/GolfSwingAnalyzerTests/Fixtures/sample_shots.csv"
-if let csvText = try? String(contentsOfFile: csvPath, encoding: .utf8) {
+if let csvPath, let csvText = try? String(contentsOfFile: csvPath, encoding: .utf8) {
     let rows = MLM2ProCSV.parse(csvText)
     check(rows.count == 5, "parses 5 shot rows (got \(rows.count))")
     if rows.count >= 2 {
@@ -452,15 +737,30 @@ if let csvText = try? String(contentsOfFile: csvPath, encoding: .utf8) {
     check(robust.count >= 5, "malformed/short lines skipped, not crashed (got \(robust.count))")
     // header-only input → no rows
     check(MLM2ProCSV.parse(csvText.split(separator: "\n").first.map(String.init) ?? "").isEmpty, "header-only ⇒ no rows")
+
+    // Real fix landed (Low-priority): parse() now tokenizes the whole text in one quote-tracking
+    // pass, so a newline inside a quoted field stays part of that field instead of ending the
+    // record early. Was previously PINNED as a known bug (3 mis-split rows instead of 2); now
+    // asserts the corrected behavior.
+    let embeddedNewlineCSV = "\"Club Type\",\"Club Brand\",\"Club Model\",\"Carry Distance\"\n" +
+        "\"9i\",\"Titleist\",\"Pro\nModel\",\"8.0\"\n" +
+        "\"7i\",\"Callaway\",\"X\",\"32.2\"\n"
+    let embeddedRows = MLM2ProCSV.parse(embeddedNewlineCSV)
+    check(embeddedRows.count == 2, "embedded newline in a quoted field no longer mis-splits (got \(embeddedRows.count), expected 2)")
+    if embeddedRows.count == 2 {
+        check(embeddedRows[0].clubType == "9i" && embeddedRows[0].clubModel == "Pro\nModel" && embeddedRows[0].carryDistance == 8.0,
+              "row 1 keeps the embedded newline as part of clubModel, and reads carryDistance correctly")
+        check(embeddedRows[1].clubType == "7i" && embeddedRows[1].carryDistance == 32.2, "row 2 is the next real row, unaffected")
+    }
 } else {
-    print("  ⊘ skipped (no CSV fixture at \(csvPath))")
+    skip("MLM2ProCSV", "no CSV fixture (set SWINGCORE_TEST_CSV to enable; validate.sh sets a repo default)")
 }
 
 // [Mock] ReplayPoseProvider — the whole pipeline runs from a recorded pose (Simulator/CI path).
+// validate.sh exports SWINGCORE_TEST_POSE_JSON at the repo's own sample_swing.pose.json by default.
 print("[Replay]")
 let poseJSON = ProcessInfo.processInfo.environment["SWINGCORE_TEST_POSE_JSON"]
-    ?? "/Users/rbisecke/workspace/golfing/swing-analyzer/ios/GolfSwingAnalyzerTests/Fixtures/sample_swing.pose.json"
-if FileManager.default.fileExists(atPath: poseJSON) {
+if let poseJSON, FileManager.default.fileExists(atPath: poseJSON) {
     do {
         let replay = try ReplayPoseProvider(contentsOf: URL(fileURLWithPath: poseJSON))
         check(replay.sequence.frames.count > 100, "replay pose has frames (\(replay.sequence.frames.count))")
@@ -476,15 +776,16 @@ if FileManager.default.fileExists(atPath: poseJSON) {
         check(rcodes.contains("chicken_wing") || rcodes.contains("hanging_back"), "replay yields known faults \(rcodes)")
         check(sw.comparison != nil && (sw.comparison?.overall ?? 0) > 0, "replay yields pro comparison")
         // Faithfulness: on macOS Vision runs, so live pose of the same fixture must match the recording.
-        let fixture = "/Users/rbisecke/workspace/golfing/swing-analyzer/ios/GolfSwingAnalyzerTests/Fixtures/sample_swing.mov"
-        if FileManager.default.fileExists(atPath: fixture) {
-            let live = try PoseEstimator.pose(video: URL(fileURLWithPath: fixture), fps: 30)
+        // Reuses SWINGCORE_TEST_CLIP (the [Pose] section's clip) rather than a second hardcoded
+        // path — sample_swing.pose.json was recorded from that same real clip.
+        if let clipPath, FileManager.default.fileExists(atPath: clipPath) {
+            let live = try PoseEstimator.pose(video: URL(fileURLWithPath: clipPath), fps: 30)
             check(EventDetector.detect(live).impact.frame == EventDetector.detect(replay.sequence).impact.frame,
                   "replay matches live Vision impact frame (faithful capture)")
         }
-    } catch { print("  ✗ FAIL: replay threw \(error)"); failures += 1 }
+    } catch { print("  ✗ FAIL: replay threw \(error)"); failures += 1; total += 1 }
 } else {
-    print("  ⊘ replay pose JSON absent (skipped)")
+    skip("Replay", "replay pose JSON absent (set SWINGCORE_TEST_POSE_JSON; validate.sh sets a repo default)")
 }
 
 // [ClubPath] C1-C5 — target/plane geometry, ball detect, over-the-top, ball-flight link, club tracker.
@@ -530,14 +831,60 @@ if let imgL = circleImage(0.25, 0.5, 8), let d = BallDetector.detectAtAddress(im
 }
 if let blank = circleImage(0.5, 0.5, 0) { check(BallDetector.detectAtAddress(image: blank) == nil, "C2 blank image ⇒ nil") }
 
+// Medium finding — footRegion now crops before allocating/drawing, instead of always scanning
+// the full-resolution buffer. Two checks: (a) a region that legitimately contains the ball still
+// finds it, with the crop-local centroid correctly mapped back to full-image-normalized
+// coordinates; (b) a region that does NOT contain the ball finds nothing, proving the crop
+// actually restricts the scan rather than being a no-op.
+if let imgRegion = circleImage(0.3, 0.6, 8) {
+    let containingRegion = CGRect(x: 0.1, y: 0.4, width: 0.4, height: 0.4)
+    if let d = BallDetector.detectAtAddress(image: imgRegion, footRegion: containingRegion) {
+        check(abs(Double(d.point.x) - 0.3) < 0.05 && abs(Double(d.point.y) - 0.6) < 0.05,
+              "C2 footRegion crop maps centroid back to full-image coords (\(d.point))")
+    } else { check(false, "C2 ball inside footRegion should be found") }
+    let excludingRegion = CGRect(x: 0.6, y: 0.0, width: 0.35, height: 0.35)
+    check(BallDetector.detectAtAddress(image: imgRegion, footRegion: excludingRegion) == nil,
+          "C2 footRegion excluding the ball ⇒ nil (crop actually restricts the scan)")
+}
+
 let over = PlaneEngine.analyze(cpPose(0.2), events: cpEvents, hand: .right, ball: cpBall)
 check(over.overTheTop, "C3 over-the-top synthetic ⇒ true (maxAbove \(over.maxAbovePlane))")
 let shallow = PlaneEngine.analyze(cpPose(0.6), events: cpEvents, hand: .right, ball: cpBall)
 check(!shallow.overTheTop, "C3 shallow synthetic ⇒ false (maxAbove \(shallow.maxAbovePlane))")
-if FileManager.default.fileExists(atPath: poseJSON), let rp = try? ReplayPoseProvider(contentsOf: URL(fileURLWithPath: poseJSON)) {
+
+// finding #7 — left-handed mirror of the same fixtures (x mirrored about 0.5, left/right joint
+// roles swapped so the lead wrist lands on .rightWrist, matching Hand.leadWrist for .left).
+// Without the sign fix, a genuine over-the-top move gets classified as shallow and vice versa.
+func cpFrameL(_ t: Double, _ wristX: Double, _ wristY: Double) -> PoseFrame {
+    PoseFrame(t: t, joints: [
+        .rightWrist: JointPoint(x: 1 - wristX, y: wristY, c: 1),
+        .rightShoulder: JointPoint(x: 1 - 0.6, y: 0.7, c: 1), .leftShoulder: JointPoint(x: 1 - 0.4, y: 0.7, c: 1),
+        .rightHip: JointPoint(x: 1 - 0.55, y: 0.5, c: 1), .leftHip: JointPoint(x: 1 - 0.45, y: 0.5, c: 1),
+    ])
+}
+func cpPoseL(_ overX: Double) -> PoseSequence {
+    var frames = [cpFrameL(0, 0.5, 0.6)]
+    for i in 1...5 { frames.append(cpFrameL(Double(i) / 30, overX, 0.5)) }
+    return PoseSequence(fps: 30, width: 1000, height: 1000, frames: frames)
+}
+let cpBallL = CGPoint(x: 1 - Double(cpBall.x), y: cpBall.y)
+let overL = PlaneEngine.analyze(cpPoseL(0.2), events: cpEvents, hand: .left, ball: cpBallL)
+check(overL.overTheTop, "C3 left-handed mirror of over-the-top synthetic ⇒ true (maxAbove \(overL.maxAbovePlane))")
+let shallowL = PlaneEngine.analyze(cpPoseL(0.6), events: cpEvents, hand: .left, ball: cpBallL)
+check(!shallowL.overTheTop, "C3 left-handed mirror of shallow synthetic ⇒ false (maxAbove \(shallowL.maxAbovePlane))")
+// The right-handed fixtures above must be completely unaffected by the hand-aware sign (a
+// regression here would mean the mirror term leaked into the .right path).
+check(over.maxAbovePlane == PlaneEngine.analyze(cpPose(0.2), events: cpEvents, hand: .right, ball: cpBall).maxAbovePlane,
+      "C3 right-handed maxAbovePlane unchanged by the hand-aware sign fix")
+if let poseJSON, FileManager.default.fileExists(atPath: poseJSON), let rp = try? ReplayPoseProvider(contentsOf: URL(fileURLWithPath: poseJSON)) {
     let pa = PlaneEngine.analyze(rp.sequence, events: EventDetector.detect(rp.sequence), angle: .faceOn, hand: .right, ball: nil)
     check(pa.maxAbovePlane.isFinite && pa.source == "hand", "C3 replay plane finite, source hand")
 }
+// Test-coverage gap: an explicitly empty (non-nil) clubPath must not silently fall back to the
+// hand-path source — it's a genuine "no club-head data this swing" signal, not "unset."
+let emptyClubPath = PlaneEngine.analyze(cpPose(0.2), events: cpEvents, hand: .right, ball: cpBall, clubPath: [])
+check(!emptyClubPath.overTheTop && emptyClubPath.maxAbovePlane == 0 && emptyClubPath.source == "club",
+      "C3 empty clubPath ⇒ overTheTop false, maxAbovePlane 0, source stays \"club\" (\(emptyClubPath.source))")
 
 var bobs: [(CGPoint, Double)] = []
 for i in 0..<10 { let x = Double(i) / 10; bobs.append((CGPoint(x: x, y: 0.9 - x * x), 1)) }
@@ -545,6 +892,20 @@ let linked = BallFlightTracer.link(bobs)
 check(linked.count == 10, "C4 ball-flight link keeps finite points (\(linked.count))")
 check(zip(linked, linked.dropFirst()).allSatisfy { Double($0.0.x) <= Double($0.1.x) + 1e-9 }, "C4 ball-flight x non-decreasing")
 check(BallFlightTracer.link([]).isEmpty, "C4 empty ⇒ empty")
+// Test-coverage gap: a single-point observation is returned unchanged (the guard requires >= 2
+// points before it attempts any sorting/smoothing).
+let singlePoint = [(CGPoint(x: 0.4, y: 0.6), 0.9)]
+check(BallFlightTracer.link(singlePoint).count == 1 && BallFlightTracer.link(singlePoint)[0] == singlePoint[0].0,
+      "C4 single-point observation returned unchanged")
+// link(_:leftToRight:) (Low-priority real fix — previously always sorted ascending-x regardless
+// of true flight direction, silently reordering a right-to-left shot, e.g. a mirrored/lefty
+// setup, backwards in time). Default (omitted / true) is unchanged left-to-right behavior;
+// leftToRight: false is the new right-to-left fixture, asserting x is now non-increasing.
+var reverseBobs: [(CGPoint, Double)] = []
+for i in 0..<10 { let x = 1 - Double(i) / 10; reverseBobs.append((CGPoint(x: x, y: 0.9 - x * x), 1)) }   // right-to-left in time
+let reverseLinked = BallFlightTracer.link(reverseBobs, leftToRight: false)
+check(zip(reverseLinked, reverseLinked.dropFirst()).allSatisfy { Double($0.0.x) >= Double($0.1.x) - 1e-9 },
+      "C4 right-to-left flight (leftToRight: false) comes out x-non-increasing, preserving true time order")
 
 var dets: [(t: Double, pt: CGPoint?, conf: Double)] = []
 for i in 0..<10 { let ok = i % 3 != 0; dets.append((Double(i) / 30, ok ? CGPoint(x: Double(i) / 10, y: 0.5) : nil, ok ? 0.9 : 0)) }
@@ -554,6 +915,26 @@ check(zip(cpath.points, cpath.points.dropFirst()).allSatisfy { $0.0.t <= $0.1.t 
 check(cpath.points.allSatisfy { $0.pos.x.isFinite && $0.pos.y.isFinite }, "C5 club path finite")
 check(cpath.coverage > 0 && cpath.coverage <= 1, "C5 coverage in (0,1] (\(cpath.coverage))")
 check(ClubTracker.path(detections: []).points.isEmpty, "C5 empty detections ⇒ empty")
+// Test-coverage gap: 100%-gap (all-nil) detections must yield empty points and zero coverage,
+// not garbage from interpolating between two nonexistent anchors.
+let allNilDets: [(t: Double, pt: CGPoint?, conf: Double)] = (0..<10).map { (Double($0) / 30, nil, 0) }
+let allNilPath = ClubTracker.path(detections: allNilDets)
+check(allNilPath.points.isEmpty && allNilPath.coverage == 0, "C5 100%-gap (all-nil) detections ⇒ empty points, coverage 0")
+
+// Test-coverage gap: two well-separated, non-overlapping bright blobs must fail the circularity
+// gate (the combined bounding box spans both circles, so width/height ratio and fill drop) and
+// return nil, not garbage from averaging both centroids together.
+func twoCircleImage(_ c1: (Double, Double), _ c2: (Double, Double), _ r: Double, _ size: Int = 100) -> CGImage? {
+    guard let ctx = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: size * 4,
+                              space: CGColorSpaceCreateDeviceRGB(), bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else { return nil }
+    ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1)); ctx.fill(CGRect(x: 0, y: 0, width: size, height: size))
+    ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+    for c in [c1, c2] { ctx.fillEllipse(in: CGRect(x: c.0 * Double(size) - r, y: c.1 * Double(size) - r, width: 2 * r, height: 2 * r)) }
+    return ctx.makeImage()
+}
+if let twoImg = twoCircleImage((0.15, 0.5), (0.85, 0.5), 6) {
+    check(BallDetector.detectAtAddress(image: twoImg) == nil, "C2 two separated blobs ⇒ nil (fails circularity, not averaged into a false centroid)")
+}
 
 do {
     let plane = PlaneAnalysis(plane: SwingLine(a: CGPoint(x: 0, y: 0.2), b: CGPoint(x: 1, y: 0.8)),
@@ -568,5 +949,8 @@ do {
           "C-model ball/club/flight round-trip")
 } catch { check(false, "C-model SwingAnalysis round-trip threw \(error)") }
 
-print(failures == 0 ? "ALL PASS" : "\(failures) FAILURE(S)")
+if !skippedSections.isEmpty {
+    print("-- skipped sections (fixture-gated, absent this run): \(skippedSections.joined(separator: ", ")) --")
+}
+print(failures == 0 ? "ALL PASS, \(total) checks" : "\(failures) FAILURE(S) of \(total) checks")
 exit(failures == 0 ? 0 : 1)

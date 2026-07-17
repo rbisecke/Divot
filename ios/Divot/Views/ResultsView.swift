@@ -13,6 +13,10 @@ struct ResultsView: View {
     @State private var shot: ShotData?
     @State private var showShotForm = false
     @State private var showCsvImport = false
+    // Share/GIF-export tasks previously kept running (and could still present the share sheet)
+    // after the user navigated away mid-export (finding Low). Stored so a new export cancels any
+    // still in flight, and cancelled outright on dismiss.
+    @State private var shareTask: Task<Void, Never>?
     private let haptics = HapticsPlayer()
 
     private var session: Session? { saved.session }
@@ -71,8 +75,8 @@ struct ResultsView: View {
         .toolbar {
             ToolbarItem(placement: .topBarTrailing) {
                 Menu {
-                    Button { shareReport() } label: { Label("Share report", systemImage: "doc.text") }
-                    Button { Task { await shareGif() } } label: { Label("Share sequence GIF", systemImage: "photo.stack") }
+                    Button { shareTask?.cancel(); shareTask = Task { shareReport() } } label: { Label("Share report", systemImage: "doc.text") }
+                    Button { shareTask?.cancel(); shareTask = Task { await shareGif() } } label: { Label("Share sequence GIF", systemImage: "photo.stack") }
                 } label: { Image(systemName: "square.and.arrow.up") }
             }
         }
@@ -86,6 +90,7 @@ struct ResultsView: View {
             if let session { CSVImportView(session: session, onImport: attachShots) }
         }
         .task { loadShot() }
+        .onDisappear { shareTask?.cancel() }
     }
 
     private func loadShot() {
@@ -129,13 +134,14 @@ struct ResultsView: View {
     }
 
     private func shareReport() {
-        guard let session, let url = ExportService.reportFile(session) else { return }
+        guard let session, let url = ExportService.reportFile(session), !Task.isCancelled else { return }
         shareItems = [url]; showShare = true
     }
 
     private func shareGif() async {
         guard let session else { return }
-        if let url = await ExportService.sequenceGif(videoURL: saved.videoURL, events: pickedSwing(session).events) {
+        if let url = await ExportService.sequenceGif(videoURL: saved.videoURL, events: pickedSwing(session).events),
+           !Task.isCancelled {
             shareItems = [url]; showShare = true
         }
     }
@@ -149,8 +155,15 @@ struct ResultsView: View {
                 Text("Tempo").font(.headline); Spacer()
                 Text(TempoFormat.ratioText(swing.metrics.tempoRatio)).font(.title3).bold()
                 Button { haptics.play(offsets: TempoHaptics.beats(for: swing)) } label: {
-                    Image(systemName: "hand.tap")
-                }.buttonStyle(.borderless).help("Feel the tempo")
+                    Image(systemName: "hand.tap").frame(minWidth: 44, minHeight: 44)
+                }
+                .buttonStyle(.borderless)
+                .help("Feel the tempo")
+                // .help() alone doesn't reliably surface as the VoiceOver label — the raw SF
+                // Symbol name ("hand.tap") isn't human-readable, and the icon-only tap target was
+                // also under the 44pt minimum (both surfaced once the a11y audit's navigation
+                // reached this screen for finding #14).
+                .accessibilityLabel("Feel the tempo")
             }
             GeometryReader { geo in
                 HStack(spacing: 2) {
@@ -181,6 +194,11 @@ struct ResultsView: View {
                                 .frame(height: 120).clipShape(RoundedRectangle(cornerRadius: 8))
                             Text(still.phase.rawValue.capitalized).font(.caption2).foregroundStyle(.secondary)
                         }
+                        // The still image had no accessibility label at all (VoiceOver announced
+                        // a bare "Image"). Combining with the phase caption below it gives the
+                        // photo a real label ("Address", "Top", etc.) instead of adding a
+                        // redundant one by hand.
+                        .accessibilityElement(children: .combine)
                     }
                 }
             }
@@ -231,6 +249,11 @@ struct ResultsView: View {
                                 ProgressView(value: m).tint(matchColor(m))
                                 Text("\(Int(m * 100))%").font(.caption).monospacedDigit()
                             }
+                            // A bare ProgressView's own hit region is just its thin bar (well
+                            // under the 44pt minimum). Combining the row into one accessibility
+                            // element gives VoiceOver a single, correctly-sized element with a
+                            // sensible combined label/value instead of three separate ones.
+                            .accessibilityElement(children: .combine)
                         }
                     }
                 }

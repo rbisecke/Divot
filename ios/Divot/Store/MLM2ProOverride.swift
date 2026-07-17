@@ -18,13 +18,15 @@ enum OverrideStore {
         return Dictionary(rows.map { ($0.code, $0.clubID) }, uniquingKeysWith: { _, b in b })
     }
 
-    static func set(code: String, clubID: UUID, in context: ModelContext) {
-        if let existing = (try? context.fetch(FetchDescriptor<MLM2ProOverride>()))?.first(where: { $0.code == code }) {
+    /// Throws rather than swallowing a persistence failure (Medium finding: the UI would show
+    /// the override as confirmed even when the write to disk failed).
+    static func set(code: String, clubID: UUID, in context: ModelContext) throws {
+        if let existing = try context.fetch(FetchDescriptor<MLM2ProOverride>()).first(where: { $0.code == code }) {
             existing.clubID = clubID
         } else {
             context.insert(MLM2ProOverride(code: code, clubID: clubID))
         }
-        try? context.save()
+        try context.save()
     }
 }
 

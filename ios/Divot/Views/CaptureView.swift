@@ -53,6 +53,11 @@ struct CaptureView: View {
                     systemImage: "camera.fill",
                     description: Text("Enable camera access in Settings to record swings."))
                     .background(.background)
+            } else if cap.cameraUnavailable {
+                ContentUnavailableView("Camera unavailable",
+                    systemImage: "camera.fill",
+                    description: Text("The camera couldn't be started. Close any other app using the camera and try again."))
+                    .background(.background)
             }
         }
         // Controls sit above every overlay so Cancel works even when access is denied.

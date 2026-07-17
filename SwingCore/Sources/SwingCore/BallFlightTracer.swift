@@ -17,10 +17,13 @@ public struct BallFlight: Codable, Sendable {
 public enum BallFlightTracer {
 
     /// Order raw (point, confidence) observations into a smoothed flight polyline. Pure.
-    public static func link(_ observations: [(CGPoint, Double)]) -> [CGPoint] {
+    /// `leftToRight` (default `true`, preserving prior behavior) says which way the flight
+    /// progresses across the frame; pass `false` for a right-to-left shot (e.g. a mirrored/lefty
+    /// setup), which otherwise gets silently reordered backwards in time.
+    public static func link(_ observations: [(CGPoint, Double)], leftToRight: Bool = true) -> [CGPoint] {
         let pts = observations.filter { $0.0.x.isFinite && $0.0.y.isFinite && $0.1 > 0 }.map { $0.0 }
         guard pts.count >= 2 else { return pts }
-        let sorted = pts.sorted { $0.x < $1.x }   // flight progresses across the frame
+        let sorted = pts.sorted { leftToRight ? $0.x < $1.x : $0.x > $1.x }   // flight progresses across the frame
         // light moving-average smoothing
         var out: [CGPoint] = []
         for i in 0..<sorted.count {

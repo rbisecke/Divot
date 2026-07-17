@@ -22,8 +22,15 @@ struct ContentView: View {
         .preferredColorScheme(.dark)   // Divot is dark-first
         .task {
             SampleData.seedIfRequested(modelContext)
-            BagStore.seedDefaultBagIfEmpty(modelContext)
-            BagStore.migrateLegacySessions(modelContext)
+            do {
+                try BagStore.seedDefaultBagIfEmpty(modelContext)
+                try BagStore.migrateLegacySessions(modelContext)
+            } catch {
+                // A transient SwiftData failure here means seeding/migration just doesn't happen
+                // for this launch (finding #17) rather than risking duplicate rows by assuming
+                // "empty" — the next launch retries.
+                print("BagStore seed/migrate failed: \(error)")
+            }
         }
     }
 }

@@ -96,7 +96,7 @@ public enum Segmenter {
                               minSep: Double = 3.0, preRoll: Double = 2.0, postRoll: Double = 2.2) -> [ClipWindow] {
         let s = JointSeries(pose); let n = s.n
         guard n > 4 else { return [] }
-        let lead: Joint = hand == .left ? .rightWrist : .leftWrist
+        let lead: Joint = hand.leadWrist
         let lwx = s.jx(lead), lwy = s.jy(lead)
         var speed = [Double](repeating: 0, count: n)
         for i in 1..<n { let dx = (lwx[i]-lwx[i-1])*s.w, dy = (lwy[i]-lwy[i-1])*s.h; speed[i] = (dx*dx+dy*dy).squareRoot() }

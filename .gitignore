@@ -30,6 +30,7 @@ AuthKey_*.p8
 
 # Claude Code
 .claude/settings.local.json
+.claude/worktrees/
 
 # macOS / editors
 .DS_Store

@@ -3,6 +3,24 @@ import SwiftUI
 import AVFoundation
 import SwingCore
 
+/// Pure tap->image-space mapping for the ball-anchor gesture below (finding #10): the gesture
+/// used to normalize against the raw GeometryReader container, but SkeletonCanvas actually draws
+/// into a smaller, centered `aspectFitRect` sub-rect whenever the container's aspect ratio doesn't
+/// exactly match the clip's — which is normal here, given the surrounding banner/label/controls.
+/// Routing the tap through the same rect keeps the two from drifting apart again.
+enum BallTapMath {
+    /// `tap` and `container` are in the same (GeometryReader) coordinate space. Returns a
+    /// normalized (0...1, 0...1) point in image space, or nil if the tap landed in the letterbox
+    /// padding outside the actual image.
+    static func normalizedPoint(tap: CGPoint, imageSize: CGSize, container: CGSize) -> CGPoint? {
+        let rect = SkeletonCanvas.aspectFitRect(image: imageSize, in: container)
+        guard rect.width > 0, rect.height > 0 else { return nil }
+        let lx = tap.x - rect.minX, ly = tap.y - rect.minY
+        guard (0...rect.width).contains(lx), (0...rect.height).contains(ly) else { return nil }
+        return CGPoint(x: min(max(lx / rect.width, 0), 1), y: min(max(ly / rect.height, 0), 1))
+    }
+}
+
 /// C1/C2/C4/C5 — plane + target line + hand-path (and experimental club-head / ball-flight)
 /// overlays for over-the-top / shallowing review. Best on down-the-line; face-on labels the plane "approx".
 struct DTLPlaneView: View {
@@ -52,8 +70,8 @@ struct DTLPlaneView: View {
                                     .contentShape(Rectangle())
                                     .gesture(SpatialTapGesture().onEnded { e in
                                         guard snap.phase == .address, geo.size.width > 0, geo.size.height > 0 else { return }
-                                        let n = CGPoint(x: min(max(e.location.x / geo.size.width, 0), 1),
-                                                        y: min(max(e.location.y / geo.size.height, 0), 1))
+                                        guard let n = BallTapMath.normalizedPoint(tap: e.location, imageSize: snap.image.size,
+                                                                                  container: geo.size) else { return }
                                         Task { await setBall(n) }
                                     })
                             }
@@ -109,7 +127,11 @@ struct DTLPlaneView: View {
             Text(label).font(.caption).padding(.horizontal, 10).padding(.vertical, 6)
                 .background(bind.wrappedValue ? color.opacity(0.3) : Color(.secondarySystemBackground),
                            in: Capsule())
-        }.buttonStyle(.plain)
+        }
+        .buttonStyle(.plain)
+        // Chip conveyed on/off purely by color; VoiceOver announced the same label regardless of
+        // state (Medium finding, same root cause as SwingPlayerView's rate chips / GhostCompareView).
+        .accessibilityAddTraits(bind.wrappedValue ? .isSelected : [])
     }
 
     @ViewBuilder private func tapHint(_ snap: FrameExtractor.PhaseSnapshot) -> some View {
@@ -126,7 +148,8 @@ struct DTLPlaneView: View {
 
     private func load() async {
         loading = true
-        let snapshots = await FrameExtractor.snapshots(videoURL: saved.videoURL, session: saved.session ?? placeholder(),
+        let snapshots = await FrameExtractor.snapshots(videoURL: saved.videoURL, cacheURL: saved.poseCacheURL,
+                                                       session: saved.session ?? placeholder(),
                                                        swing: swing, ball: ballAnchor.ball)
         snaps = snapshots
         if ballAnchor.ball == nil, let b = snapshots.first?.ball { ballAnchor.setTap(b) }

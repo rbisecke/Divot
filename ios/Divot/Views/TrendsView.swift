@@ -84,11 +84,15 @@ struct TrendsView: View {
             ForEach(points) { p in
                 PointMark(x: .value("Date", p.date), y: .value("Value", p.value))
                     .foregroundStyle(DataVizRole.reference.color)
+                    // The two series were distinguished only by color for VoiceOver (finding
+                    // Low) — Swift Charts marks support accessibilityLabel natively.
+                    .accessibilityLabel("Reference")
             }
             ForEach(trend) { p in
                 LineMark(x: .value("Date", p.date), y: .value("Trend", p.value))
                     .foregroundStyle(DataVizRole.you.color)
                     .interpolationMethod(.catmullRom)
+                    .accessibilityLabel("Your trend")
             }
             if let selDate, let np = ChartScrub.nearest(to: selDate, in: points.map { ($0.date, $0.value) }) {
                 RuleMark(x: .value("Date", np.date))

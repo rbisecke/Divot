@@ -129,9 +129,25 @@ final class AppValidationTests: XCTestCase {
 
     // MARK: Persistence
 
+    /// Regression test for finding #12: swing video must never be included in an iCloud device
+    /// backup, even though CLAUDE.md/SECURITY.md's "video never leaves the phone" claim doesn't by
+    /// itself stop Documents/ from being backed up by default.
+    func testVideosDirExcludedFromBackup() throws {
+        let values = try AppPaths.videosDir.resourceValues(forKeys: [.isExcludedFromBackupKey])
+        XCTAssertEqual(values.isExcludedFromBackup, true, "swing video must never be included in iCloud device backup")
+    }
+
     func testSavedSessionRoundTrip() throws {
-        let clip = try sampleClip()
-        let session = try SwingAnalyzer.analyzeSession(video: clip, club: pw, angle: .faceOn, hand: .right)
+        // Replay provider, not the real VisionPoseProvider over sampleClip(): the Simulator has no
+        // body-pose model, so live Vision detects zero joints in every frame of the placeholder
+        // clip. Before finding #6's fix that silently produced a garbage-but-non-throwing swing
+        // (exactly the bug #6 fixes); now it correctly throws lowPoseConfidence/noSwingDetected,
+        // so this SwiftData round-trip test needs a real (replayed) swing to persist instead.
+        let bundle = Bundle(for: type(of: self))
+        let jsonURL = try XCTUnwrap(bundle.url(forResource: "sample_swing.pose", withExtension: "json"))
+        let replay = try ReplayPoseProvider(contentsOf: jsonURL)
+        let session = try SwingAnalyzer.analyzeSession(video: URL(fileURLWithPath: "/dev/null"),
+                                                        club: pw, angle: .faceOn, hand: .right, provider: replay)
 
         let container = try ModelContainer(for: SavedSession.self,
             configurations: ModelConfiguration(isStoredInMemoryOnly: true))
@@ -170,20 +186,20 @@ final class AppValidationTests: XCTestCase {
 
     func testSeedDefaultBagIsIdempotent() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let first = try ctx.fetch(FetchDescriptor<BagClub>())
         XCTAssertEqual(first.count, 11, "default bag seeds 11 clubs")
         // ordered by sortKey (Driver first, wedges last).
         let ordered = first.sorted { $0.order < $1.order }.map { $0.spec.displayName }
         XCTAssertEqual(ordered, ["Driver","3W","5H","6i","7i","8i","9i","PW","50°","54°","58°"])
         // second call must not duplicate.
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         XCTAssertEqual(try ctx.fetch(FetchDescriptor<BagClub>()).count, 11, "re-seed is a no-op")
     }
 
     func testMigrateLegacySessionBindsToBag() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         // A pre-ClubSpec session: only the legacy clubRaw is set, snapshot empty.
         let session = makeSession(club: pw)
         let legacy = SavedSession(date: session.date, club: pw, angle: .faceOn, hand: .right,
@@ -193,7 +209,7 @@ final class AppValidationTests: XCTestCase {
         ctx.insert(legacy)
         try ctx.save()
 
-        let migrated = BagStore.migrateLegacySessions(ctx)
+        let migrated = try BagStore.migrateLegacySessions(ctx)
         XCTAssertEqual(migrated, 1)
         let row = try XCTUnwrap(try ctx.fetch(FetchDescriptor<SavedSession>()).first)
         XCTAssertNil(row.clubRaw, "legacy raw cleared after migration")
@@ -206,12 +222,12 @@ final class AppValidationTests: XCTestCase {
         XCTAssertNotNil(row.session, "analysis still decodes after migration")
         XCTAssertEqual(try ctx.fetch(FetchDescriptor<BagClub>()).count, 11, "no extra club created")
         // idempotent: a second pass migrates nothing.
-        XCTAssertEqual(BagStore.migrateLegacySessions(ctx), 0)
+        XCTAssertEqual(try BagStore.migrateLegacySessions(ctx), 0)
     }
 
     func testMigrateCreatesClubWhenNotCarried() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)   // default bag has no 56° wedge
+        try BagStore.seedDefaultBagIfEmpty(ctx)   // default bag has no 56° wedge
         let session = makeSession(club: pw)
         let legacy = SavedSession(date: session.date, club: pw, angle: .faceOn, hand: .right,
                                   videoFilename: "old.mov", session: session)
@@ -219,7 +235,7 @@ final class AppValidationTests: XCTestCase {
         ctx.insert(legacy)
         try ctx.save()
 
-        XCTAssertEqual(BagStore.migrateLegacySessions(ctx), 1)
+        XCTAssertEqual(try BagStore.migrateLegacySessions(ctx), 1)
         XCTAssertEqual(try ctx.fetch(FetchDescriptor<BagClub>()).count, 12, "an absent legacy club is added to the bag")
         let row = try XCTUnwrap(try ctx.fetch(FetchDescriptor<SavedSession>()).first)
         XCTAssertEqual(row.club.loft, 56)
@@ -227,7 +243,7 @@ final class AppValidationTests: XCTestCase {
 
     func testRetiredClubStillResolvesHistory() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let seven = try XCTUnwrap(bag.first { $0.category == .iron && $0.number == 7 })
         let saved = SavedSession(date: .now, club: seven, angle: .faceOn, hand: .right,
@@ -268,7 +284,7 @@ final class AppValidationTests: XCTestCase {
 
     func testDuplicateWedgesPersistDistinctly() throws {
         let ctx = try bagContainer()
-        for l in [50.0, 54.0, 58.0] { BagEditor.add(BagEditor.wedgeSpec(loft: l), to: ctx) }
+        for l in [50.0, 54.0, 58.0] { try BagEditor.add(BagEditor.wedgeSpec(loft: l), to: ctx) }
         let wedges = try ctx.fetch(FetchDescriptor<BagClub>()).filter { $0.spec.category == .wedge }
         XCTAssertEqual(wedges.count, 3)
         XCTAssertEqual(Set(wedges.compactMap { $0.spec.loft }), [50, 54, 58])
@@ -277,32 +293,32 @@ final class AppValidationTests: XCTestCase {
 
     func testRetireHidesButKeepsRow() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let total = try ctx.fetchCount(FetchDescriptor<BagClub>())
         let driver = try XCTUnwrap(try ctx.fetch(FetchDescriptor<BagClub>()).first { $0.spec.category == .driver })
-        BagEditor.retire(driver, in: ctx)
+        try BagEditor.retire(driver, in: ctx)
         XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<BagClub>()), total, "retire keeps the row")
         XCTAssertFalse(BagStore.activeBag(ctx).contains { $0.category == .driver }, "retired club leaves the active bag")
-        BagEditor.restore(driver, in: ctx)
+        try BagEditor.restore(driver, in: ctx)
         XCTAssertTrue(BagStore.activeBag(ctx).contains { $0.category == .driver }, "restore brings it back")
     }
 
     func testReorderPersists() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         var clubs = try ctx.fetch(FetchDescriptor<BagClub>()).sorted { $0.order < $1.order }
         let firstID = clubs[0].id
         clubs.reverse()
-        BagEditor.reorder(clubs, in: ctx)
+        try BagEditor.reorder(clubs, in: ctx)
         let reread = try ctx.fetch(FetchDescriptor<BagClub>()).sorted { $0.order < $1.order }
         XCTAssertEqual(reread.last?.id, firstID, "the previously-first club is now last")
     }
 
     func testDeleteRemovesFromBag() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let club = try XCTUnwrap(try ctx.fetch(FetchDescriptor<BagClub>()).first { $0.spec.category == .wedge && $0.spec.loft == 58 })
-        BagEditor.delete(club, in: ctx)
+        try BagEditor.delete(club, in: ctx)
         XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<BagClub>()), 10)
         XCTAssertFalse(try ctx.fetch(FetchDescriptor<BagClub>()).contains { $0.spec.loft == 58 })
     }
@@ -317,7 +333,7 @@ final class AppValidationTests: XCTestCase {
 
     func testCsvClubCodeAutoBinds() throws {
         let ctx = try importContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let bundle = Bundle(for: type(of: self))
         let url = try XCTUnwrap(bundle.url(forResource: "sample_shots", withExtension: "csv"))
@@ -337,8 +353,8 @@ final class AppValidationTests: XCTestCase {
     func testAmbiguousWedgeCodeConfirmsOnceThenPersists() throws {
         let ctx = try importContainer()
         // A bag with two sand-range wedges makes "sw" ambiguous.
-        BagEditor.add(ClubSpec(category: .wedge, loft: 54), to: ctx)
-        BagEditor.add(ClubSpec(category: .wedge, loft: 56), to: ctx)
+        try BagEditor.add(ClubSpec(category: .wedge, loft: 54), to: ctx)
+        try BagEditor.add(ClubSpec(category: .wedge, loft: 56), to: ctx)
         let bag = BagStore.activeBag(ctx)
         let rows = MLM2ProCSV.parse("Club Type\nsw\nsw")
 
@@ -348,7 +364,7 @@ final class AppValidationTests: XCTestCase {
 
         // User picks the 54° wedge; the choice persists.
         let w54 = try XCTUnwrap(bag.first { $0.loft == 54 })
-        OverrideStore.set(code: "sw", clubID: w54.id, in: ctx)
+        try OverrideStore.set(code: "sw", clubID: w54.id, in: ctx)
 
         // Second import: no confirmation, "sw" now auto-binds to the chosen 54°.
         res = ClubCodeResolver.resolve(rows: rows, bag: bag, overrides: OverrideStore.all(ctx))
@@ -359,9 +375,9 @@ final class AppValidationTests: XCTestCase {
     func testOverrideStoreUpdatesInPlace() throws {
         let ctx = try importContainer()
         let a = UUID(), b = UUID()
-        OverrideStore.set(code: "gw", clubID: a, in: ctx)
+        try OverrideStore.set(code: "gw", clubID: a, in: ctx)
         XCTAssertEqual(OverrideStore.all(ctx)["gw"], a)
-        OverrideStore.set(code: "gw", clubID: b, in: ctx)
+        try OverrideStore.set(code: "gw", clubID: b, in: ctx)
         XCTAssertEqual(OverrideStore.all(ctx)["gw"], b, "re-confirming updates rather than duplicating")
         XCTAssertEqual(try ctx.fetchCount(FetchDescriptor<MLM2ProOverride>()), 1)
     }
@@ -383,7 +399,7 @@ final class AppValidationTests: XCTestCase {
 
     func testPerWedgeTrendsAreDistinct() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let w54 = try XCTUnwrap(bag.first { $0.category == .wedge && $0.loft == 54 })
         let w58 = try XCTUnwrap(bag.first { $0.category == .wedge && $0.loft == 58 })
@@ -412,10 +428,10 @@ final class AppValidationTests: XCTestCase {
 
     func testCapturePickerListsActiveBagInLoftOrder() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         // retire the driver — it must drop out of the picker.
         let driver = try XCTUnwrap(try ctx.fetch(FetchDescriptor<BagClub>()).first { $0.spec.category == .driver })
-        BagEditor.retire(driver, in: ctx)
+        try BagEditor.retire(driver, in: ctx)
 
         let picker = BagStore.activeBag(ctx)
         XCTAssertFalse(picker.contains { $0.category == .driver }, "retired club is not offered")
@@ -425,7 +441,7 @@ final class AppValidationTests: XCTestCase {
 
     func testCapturePickerPreselectsLastUsed() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let wedge54 = try XCTUnwrap(bag.first { $0.category == .wedge && $0.loft == 54 })
         // "last used" = the persisted club id.
@@ -435,7 +451,7 @@ final class AppValidationTests: XCTestCase {
 
     func testCapturePickerFallsBackWhenUnset() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let resolved = try XCTUnwrap(BagStore.resolveClub(setting: "", in: bag))
         XCTAssertEqual(resolved.category, .iron, "an unset default resolves to a mid-iron")
@@ -443,7 +459,7 @@ final class AppValidationTests: XCTestCase {
 
     func testCapturePickerSelectionPersistsClubID() throws {
         let ctx = try bagContainer()
-        BagStore.seedDefaultBagIfEmpty(ctx)
+        try BagStore.seedDefaultBagIfEmpty(ctx)
         let bag = BagStore.activeBag(ctx)
         let nine = try XCTUnwrap(bag.first { $0.category == .iron && $0.number == 9 })
         // selecting the 9-iron and saving a session records its stable id.
@@ -489,6 +505,18 @@ final class AppValidationTests: XCTestCase {
     func testFrameRateNoticeThreshold() {
         XCTAssertTrue(ScrubberMath.showsLowFpsNotice(30))
         XCTAssertFalse(ScrubberMath.showsLowFpsNotice(120))
+    }
+
+    /// SwingPlayerModel.loadMetadata() replaced synchronous asset.duration/tracks reads with the
+    /// async load(_:) API (finding Low) — confirm it actually populates duration/aspectRatio from
+    /// the repo's synthetic fixture clip instead of leaving the harmless defaults in place.
+    @MainActor
+    func testSwingPlayerModelLoadsMetadataAsync() async throws {
+        let model = SwingPlayerModel(url: try sampleClip())
+        XCTAssertEqual(model.duration, 0, "duration is the harmless default before loadMetadata()")
+        await model.loadMetadata()
+        XCTAssertGreaterThan(model.duration, 0, "loadMetadata() populates a real duration")
+        XCTAssertGreaterThan(model.aspectRatio, 0, "loadMetadata() populates a sane (positive) aspect ratio")
     }
 
     func testTempoCardFormatting() {
@@ -668,8 +696,17 @@ final class AppValidationTests: XCTestCase {
 
     // MARK: Club-path (C1–C6)
 
-    /// C1/C3 — the DTL overlay builds from replay pose on the Simulator, with a plane + hand-path,
-    /// and the over-the-top plane analysis is populated and surfaces via PlaneFormat.
+    /// C1/C3 — the DTL overlay builds from replay pose, with a plane + hand-path, and the
+    /// over-the-top plane analysis is populated and surfaces via PlaneFormat.
+    ///
+    /// `sampleClip()` is the synthetic placeholder (no human body), so `swing.events` are
+    /// deliberately computed via an explicit `replay` provider rather than the placeholder clip's
+    /// own (nonexistent) pose. `FrameExtractor.snapshots`, however, resolves its pose through
+    /// `PoseCache` -> `PoseProviderFactory`, which only substitutes replay data on the Simulator;
+    /// on a real device it correctly runs real Vision against the placeholder clip and (correctly)
+    /// finds no body. Pre-seeding the cache with the same replay sequence used for `swing.events`
+    /// keeps this test deterministic on both platforms instead of only ever having been exercised
+    /// on the Simulator.
     func testDTLOverlayBuildsFromReplay() async throws {
         let bundle = Bundle(for: type(of: self))
         let clip = try sampleClip()
@@ -678,7 +715,10 @@ final class AppValidationTests: XCTestCase {
         let session = try SwingAnalyzer.analyzeSession(video: clip, club: i7, angle: .dtl, hand: .right, provider: replay)
         let swing = try XCTUnwrap(session.swings.first)
 
-        let snaps = await FrameExtractor.snapshots(videoURL: clip, session: session, swing: swing)
+        let cacheURL = FileManager.default.temporaryDirectory.appendingPathComponent("test-pose-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: cacheURL) }
+        try JSONEncoder().encode(replay.sequence).write(to: cacheURL)
+        let snaps = await FrameExtractor.snapshots(videoURL: clip, cacheURL: cacheURL, session: session, swing: swing)
         XCTAssertFalse(snaps.isEmpty, "overlay snapshots build")
         XCTAssertGreaterThan(snaps[0].handPath.count, 1, "hand-path has points")
         XCTAssertNotNil(snaps[0].shaftPlane ?? snaps[0].lines["swingPlane"], "a plane line exists")
@@ -691,6 +731,43 @@ final class AppValidationTests: XCTestCase {
         XCTAssertTrue(PlaneFormat.detail(plane).contains("dev"))
     }
 
+    /// Regression test for finding #13: a second call with the same cacheURL must be served from
+    /// the cache, not recomputed. Proven by pointing the second call's videoURL at a path that
+    /// doesn't exist — PoseEstimator.pose would throw unreadableVideo (nil result) if it were ever
+    /// actually invoked a second time, so a non-nil, identical-frame-count result proves the cache
+    /// was hit instead of the (nonexistent) video being re-read.
+    func testPoseCacheServesSecondCallWithoutRereadingVideo() async throws {
+        let clip = try sampleClip()
+        let cacheURL = FileManager.default.temporaryDirectory.appendingPathComponent("test-pose-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: cacheURL) }
+
+        let firstResult = await PoseCache.devicePose(videoURL: clip, cacheURL: cacheURL)
+        let first = try XCTUnwrap(firstResult)
+        XCTAssertTrue(FileManager.default.fileExists(atPath: cacheURL.path), "cache file written after first call")
+
+        let bogus = URL(fileURLWithPath: "/nonexistent/\(UUID().uuidString).mov")
+        let secondResult = await PoseCache.devicePose(videoURL: bogus, cacheURL: cacheURL)
+        let second = try XCTUnwrap(secondResult, "second call should be served from cache despite a nonexistent video path")
+        XCTAssertEqual(second.frames.count, first.frames.count, "cached sequence matches the original")
+    }
+
+    /// Regression coverage for the BallDetector/FrameExtractor footRegion crop optimization
+    /// (Medium finding): ballSearchRegion derives a bounded search rect from the address-frame
+    /// ankles instead of always scanning the full-resolution frame.
+    func testBallSearchRegionBoundsFromAnkles() throws {
+        let frame = PoseFrame(t: 0, joints: [
+            .leftAnkle: JointPoint(x: 0.45, y: 0.05, c: 1), .rightAnkle: JointPoint(x: 0.55, y: 0.08, c: 1),
+        ])
+        let r = try XCTUnwrap(FrameExtractor.ballSearchRegion(frame))
+        XCTAssertTrue(r.width > 0 && r.height > 0, "sane bounded rect")
+        XCTAssertTrue(r.minX >= 0 && r.maxX <= 1 && r.minY >= 0 && r.maxY <= 1, "clamped to [0,1]")
+    }
+
+    func testBallSearchRegionNilWithoutAnkles() {
+        let frame = PoseFrame(t: 0, joints: [.leftShoulder: JointPoint(x: 0.5, y: 0.7, c: 1)])
+        XCTAssertNil(FrameExtractor.ballSearchRegion(frame))
+    }
+
     /// C2 — ball anchor falls back to a tap when auto-detect returns nothing.
     @MainActor func testBallTapFallbackSetsAnchor() {
         let m = BallAnchorModel(detected: nil)
@@ -698,6 +775,48 @@ final class AppValidationTests: XCTestCase {
         m.setTap(CGPoint(x: 0.5, y: 0.8))
         XCTAssertTrue(m.isSet)
         XCTAssertEqual(m.ball?.x ?? 0, 0.5, accuracy: 0.0001)
+    }
+
+    // MARK: Ball-tap letterboxing (finding #10)
+
+    /// Container letterboxed left/right (image taller/narrower than the container): a tap at the
+    /// container's exact center must map to image-space (0.5, 0.5), not be offset by the padding.
+    func testBallTapMapsCenterThroughLeftRightLetterbox() throws {
+        let container = CGSize(width: 400, height: 300)
+        let image = CGSize(width: 300, height: 300)   // square image in a wider container
+        let center = CGPoint(x: container.width / 2, y: container.height / 2)
+        let n = try XCTUnwrap(BallTapMath.normalizedPoint(tap: center, imageSize: image, container: container))
+        XCTAssertEqual(n.x, 0.5, accuracy: 0.001)
+        XCTAssertEqual(n.y, 0.5, accuracy: 0.001)
+    }
+
+    /// Container letterboxed top/bottom (image wider/shorter than the container).
+    func testBallTapMapsCenterThroughTopBottomLetterbox() throws {
+        let container = CGSize(width: 300, height: 400)
+        let image = CGSize(width: 300, height: 300)
+        let center = CGPoint(x: container.width / 2, y: container.height / 2)
+        let n = try XCTUnwrap(BallTapMath.normalizedPoint(tap: center, imageSize: image, container: container))
+        XCTAssertEqual(n.x, 0.5, accuracy: 0.001)
+        XCTAssertEqual(n.y, 0.5, accuracy: 0.001)
+    }
+
+    /// A tap that lands in the letterbox padding (outside the actual drawn image) is ignored.
+    func testBallTapInLetterboxPaddingIsIgnored() {
+        let container = CGSize(width: 400, height: 300)   // wider than the square image below
+        let image = CGSize(width: 300, height: 300)
+        // Image draws at x in [50, 350]; a tap at x=10 is in the left padding.
+        let n = BallTapMath.normalizedPoint(tap: CGPoint(x: 10, y: 150), imageSize: image, container: container)
+        XCTAssertNil(n, "tap in the letterbox padding should be ignored, not clamped into the image")
+    }
+
+    /// A tap exactly on the image's edge clamps to 0/1, not just outside it.
+    func testBallTapAtImageEdgeClamps() throws {
+        let container = CGSize(width: 400, height: 300)
+        let image = CGSize(width: 300, height: 300)
+        let rect = SkeletonCanvas.aspectFitRect(image: image, in: container)
+        let n = try XCTUnwrap(BallTapMath.normalizedPoint(tap: CGPoint(x: rect.minX, y: rect.minY), imageSize: image, container: container))
+        XCTAssertEqual(n.x, 0, accuracy: 0.001)
+        XCTAssertEqual(n.y, 0, accuracy: 0.001)
     }
 
     /// C6 — the back camera advertises a high-frame-rate format (needed for club-head vision). Device-only.
@@ -743,6 +862,19 @@ final class AppValidationTests: XCTestCase {
     func testCameraSwitchTogglesPosition() {
         XCTAssertEqual(CaptureController.nextPosition(.back), .front)
         XCTAssertEqual(CaptureController.nextPosition(.front), .back)
+    }
+
+    /// Regression coverage for finding #5: live pose tracking hardcoded `.up` regardless of the
+    /// connection's actual rotation/mirroring, which is wrong in the normal (portrait) case.
+    func testVisionOrientationAccountsForRotationAndMirroring() {
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 90, position: .back), .right)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 90, position: .front), .leftMirrored)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 270, position: .back), .left)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 270, position: .front), .rightMirrored)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 0, position: .back), .up)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 0, position: .front), .upMirrored)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 180, position: .back), .down)
+        XCTAssertEqual(CaptureController.visionOrientation(rotationAngle: 180, position: .front), .downMirrored)
     }
 
     // MARK: Wave 2 (branding cohesion + data-UX)

@@ -21,7 +21,7 @@ public enum SequenceEngine {
         let s = JointSeries(pose); let n = s.n
         guard n >= 3 else { return KinematicSequence(order: [], peakTimes: [:], inSequence: false) }
         let lead = hand == .left ? "right" : "left"
-        func J(_ side: String, _ part: String) -> Joint { Joint(rawValue: side + part)! }
+        func J(_ side: String, _ part: String) -> Joint { Joint.bySideAndPart(side, part) }
 
         func lineAngle(_ j1: Joint, _ j2: Joint, _ i: Int) -> Double {
             let dx = (s.jx(j2)[i] - s.jx(j1)[i]) * s.w

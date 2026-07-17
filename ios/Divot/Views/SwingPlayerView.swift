@@ -24,27 +24,50 @@ enum ScrubberMath {
 @MainActor
 final class SwingPlayerModel: ObservableObject {
     let player: AVPlayer
-    let duration: Double
-    let nominalFrameRate: Float
+    // Populated asynchronously by loadMetadata() rather than read synchronously off `asset` in
+    // init (finding Low): AVAsset.duration/tracks are deprecated blocking calls that stalled the
+    // NavigationLink push while decoding the container. Harmless defaults until then; a 9:16
+    // portrait guess for aspectRatio matches the view's previous hardcoded value.
+    @Published private(set) var duration: Double = 0
+    @Published private(set) var nominalFrameRate: Float = 30
+    @Published private(set) var aspectRatio: Double = 9.0 / 16.0
     @Published var current: Double = 0
     @Published var rate: Float = 0
     private var observer: Any?
-    private let frameDur: Double
+    private var frameDur: Double = 1.0 / 30
+    private let url: URL
 
     init(url: URL) {
-        let asset = AVURLAsset(url: url)
+        self.url = url
         player = AVPlayer(url: url)
-        let dur = CMTimeGetSeconds(asset.duration)
-        duration = dur.isFinite ? dur : 0
-        let fps = asset.tracks(withMediaType: .video).first?.nominalFrameRate ?? 30
-        nominalFrameRate = fps
-        frameDur = fps > 0 ? 1.0 / Double(fps) : 1.0 / 30
         observer = player.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.03, preferredTimescale: 600), queue: .main) { [weak self] t in
             self?.current = CMTimeGetSeconds(t)
         }
     }
     deinit { if let o = observer { player.removeTimeObserver(o) } }
+
+    /// Async replacement for the old synchronous `asset.duration`/`asset.tracks` reads. Called
+    /// from the view's `.task { await model.loadMetadata() }`, matching the existing
+    /// `.task { await load() }` idiom used elsewhere in the view layer.
+    func loadMetadata() async {
+        let asset = AVURLAsset(url: url)
+        if let dur = try? await asset.load(.duration) {
+            let d = CMTimeGetSeconds(dur)
+            if d.isFinite, d > 0 { duration = d }
+        }
+        guard let track = try? await asset.loadTracks(withMediaType: .video).first else { return }
+        if let fps = try? await track.load(.nominalFrameRate), fps > 0 {
+            nominalFrameRate = fps
+            frameDur = 1.0 / Double(fps)
+        }
+        if let size = try? await track.load(.naturalSize),
+           let transform = try? await track.load(.preferredTransform) {
+            let t = size.applying(transform)
+            let w = abs(t.width), h = abs(t.height)
+            if w > 0, h > 0 { aspectRatio = w / h }
+        }
+    }
 
     func seek(toFraction f: Double) { seek(to: f * duration) }
     func seek(to t: Double) {
@@ -81,7 +104,7 @@ struct SwingPlayerView: View {
     var body: some View {
         VStack(spacing: 12) {
             PlayerLayerView(player: model.player)
-                .aspectRatio(9.0 / 16.0, contentMode: .fit)
+                .aspectRatio(model.aspectRatio, contentMode: .fit)
                 .frame(maxWidth: .infinity)
                 .background(Color.black)
                 .clipShape(RoundedRectangle(cornerRadius: 12))
@@ -97,6 +120,7 @@ struct SwingPlayerView: View {
         .padding()
         .navigationTitle("Playback")
         .navigationBarTitleDisplayMode(.inline)
+        .task { await model.loadMetadata() }
     }
 
     private var scrubber: some View {
@@ -119,15 +143,35 @@ struct SwingPlayerView: View {
                 model.setRate(0)
                 model.seek(toFraction: min(1, max(0, g.location.x / w)))
             })
+            // The hand-built Capsule/DragGesture scrubber had no accessibility element at all, so
+            // a VoiceOver user couldn't scrub playback by any means (finding #14). A swipe
+            // up/down while focused stands in for the drag gesture.
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Playback position")
+            .accessibilityValue(Text(String(format: "%.1f seconds", model.current)))
+            .accessibilityAdjustableAction { direction in
+                let step = model.duration > 0 ? model.duration * 0.02 : 0.1
+                switch direction {
+                case .increment: model.seek(to: min(model.duration, model.current + step))
+                case .decrement: model.seek(to: max(0, model.current - step))
+                @unknown default: break
+                }
+            }
         }
         .frame(height: 22)
     }
 
     private var controls: some View {
         HStack(spacing: 16) {
-            Button { model.step(-1) } label: { Image(systemName: "backward.frame.fill") }
-            Button { model.playPause() } label: { Image(systemName: model.rate == 0 ? "play.fill" : "pause.fill") }
-            Button { model.step(1) } label: { Image(systemName: "forward.frame.fill") }
+            // Icon-only SF Symbol buttons default to a tap target under the 44pt accessibility
+            // minimum; frame(minWidth:minHeight:) on the label enlarges the hit region without
+            // changing the visible glyph size.
+            Button { model.step(-1) } label: { Image(systemName: "backward.frame.fill").frame(minWidth: 44, minHeight: 44) }
+                .accessibilityLabel("Previous frame")
+            Button { model.playPause() } label: { Image(systemName: model.rate == 0 ? "play.fill" : "pause.fill").frame(minWidth: 44, minHeight: 44) }
+                .accessibilityLabel(model.rate == 0 ? "Play" : "Pause")
+            Button { model.step(1) } label: { Image(systemName: "forward.frame.fill").frame(minWidth: 44, minHeight: 44) }
+                .accessibilityLabel("Next frame")
             Spacer()
             ForEach(rates, id: \.self) { r in
                 Button { model.setRate(r) } label: {
@@ -136,6 +180,11 @@ struct SwingPlayerView: View {
                         .background(model.rate == r ? Color.accentColor : Color.gray.opacity(0.2), in: Capsule())
                         .foregroundStyle(model.rate == r ? .white : .primary)
                 }
+                // Rate chips conveyed the active speed by color alone; VoiceOver announced the
+                // same label regardless of which was selected (finding #14, same root cause as
+                // the Medium-tier "toggle chips convey state by color only" item).
+                .accessibilityLabel("\(rateLabel(r)) speed")
+                .accessibilityAddTraits(model.rate == r ? .isSelected : [])
             }
         }
         .font(.title3)

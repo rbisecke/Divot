@@ -17,12 +17,15 @@ public enum SwingLines {
     /// Coach lines at a given frame: shoulder line, hip line, spine tilt, lead-arm/shaft, swing-plane proxy.
     /// A line is omitted if any joint it needs is missing/NaN at that frame. All points are finite and in 0…1.
     public static func lines(_ pose: PoseSequence, at frame: Int, hand: Hand = .right) -> [String: SwingLine] {
-        let s = JointSeries(pose)
+        lines(JointSeries(pose), at: frame, hand: hand)
+    }
+    /// JointSeries-accepting overload — see EventDetector.detect's overload for why.
+    static func lines(_ s: JointSeries, at frame: Int, hand: Hand = .right) -> [String: SwingLine] {
         guard s.n > 0 else { return [:] }
         let f = min(max(frame, 0), s.n - 1)
         let lead = hand == .left ? "right" : "left"
         let trail = hand == .left ? "left" : "right"
-        func J(_ side: String, _ part: String) -> Joint { Joint(rawValue: side + part)! }
+        func J(_ side: String, _ part: String) -> Joint { Joint.bySideAndPart(side, part) }
 
         // point in top-left normalized coords, or nil if not finite
         func P(_ j: Joint) -> CGPoint? {
@@ -51,11 +54,14 @@ public enum SwingLines {
 
     /// Lead-hand (wrist) path across [from, to], one point per frame, top-left normalized.
     public static func handPath(_ pose: PoseSequence, from: Int, to: Int, hand: Hand = .right) -> [CGPoint] {
-        let s = JointSeries(pose)
+        handPath(JointSeries(pose), from: from, to: to, hand: hand)
+    }
+    /// JointSeries-accepting overload — see EventDetector.detect's overload for why.
+    static func handPath(_ s: JointSeries, from: Int, to: Int, hand: Hand = .right) -> [CGPoint] {
         guard s.n > 0 else { return [] }
         let lo = min(max(from, 0), s.n - 1), hi = min(max(to, 0), s.n - 1)
         guard hi >= lo else { return [] }
-        let wr = hand == .left ? Joint.rightWrist : .leftWrist
+        let wr = hand.leadWrist
         let xs = s.jx(wr), ys = s.jy(wr)
         var pts: [CGPoint] = []
         for i in lo...hi where xs[i].isFinite && ys[i].isFinite {
@@ -66,7 +72,10 @@ public enum SwingLines {
 
     /// Bounding box of head movement (nose, or ear-midpoint fallback) from address to finish, top-left normalized.
     public static func headBox(_ pose: PoseSequence, events: SwingEvents) -> CGRect {
-        let s = JointSeries(pose)
+        headBox(JointSeries(pose), events: events)
+    }
+    /// JointSeries-accepting overload — see EventDetector.detect's overload for why.
+    static func headBox(_ s: JointSeries, events: SwingEvents) -> CGRect {
         guard s.n > 0 else { return .zero }
         let lo = min(max(events.address.frame, 0), s.n - 1)
         let hi = min(max(events.finish.frame, 0), s.n - 1)
@@ -94,7 +103,12 @@ public enum SwingLines {
     /// scale calibration as MetricsEngine (40cm shoulders face-on, 50cm torso down-the-line).
     public static func headTravelCm(_ pose: PoseSequence, events: SwingEvents,
                                     angle: Angle = .faceOn, hand: Hand = .right) -> Double {
-        let s = JointSeries(pose); let n = s.n
+        headTravelCm(JointSeries(pose), events: events, angle: angle, hand: hand)
+    }
+    /// JointSeries-accepting overload — see EventDetector.detect's overload for why.
+    static func headTravelCm(_ s: JointSeries, events: SwingEvents,
+                             angle: Angle = .faceOn, hand: Hand = .right) -> Double {
+        let n = s.n
         guard n > 0 else { return 0 }
         let a = min(max(events.address.frame, 0), n - 1)
         func distPx(_ ax: Double, _ ay: Double, _ bx: Double, _ by: Double) -> Double {

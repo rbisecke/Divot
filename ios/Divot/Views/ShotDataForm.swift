@@ -38,7 +38,12 @@ struct ShotDataForm: View {
 
     private func field(_ label: String, _ text: Binding<String>) -> some View {
         HStack { Text(label); Spacer()
-            TextField("", text: text).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 90) }
+            TextField("", text: text).keyboardType(.decimalPad).multilineTextAlignment(.trailing).frame(width: 90)
+                // The empty "" placeholder above also doubles as the accessibility label by
+                // default, so VoiceOver announced every field as "text field, blank" with no way
+                // to tell them apart (finding #14). Pass the real label through explicitly.
+                .accessibilityLabel(label)
+        }
     }
 
     private func save() {
