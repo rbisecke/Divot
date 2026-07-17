@@ -23,7 +23,8 @@ test: generate        ## T2 simulator: unit + a11y audit + screenshot tour
 
 device-test: generate ## T3 on-device (make device-test DEVICE=<udid>)
 	set -o pipefail; NSUnbufferedIO=YES xcodebuild test \
-	  -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=iOS,id=$(DEVICE)' | xcbeautify
+	  -project $(PROJECT) -scheme $(SCHEME) -destination 'platform=iOS,id=$(DEVICE)' \
+	  -allowProvisioningUpdates | xcbeautify
 
 placeholder:          ## regenerate the synthetic test clip
 	swift tools/make_placeholder_clip.swift
