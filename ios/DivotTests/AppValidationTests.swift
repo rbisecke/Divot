@@ -696,8 +696,17 @@ final class AppValidationTests: XCTestCase {
 
     // MARK: Club-path (C1–C6)
 
-    /// C1/C3 — the DTL overlay builds from replay pose on the Simulator, with a plane + hand-path,
-    /// and the over-the-top plane analysis is populated and surfaces via PlaneFormat.
+    /// C1/C3 — the DTL overlay builds from replay pose, with a plane + hand-path, and the
+    /// over-the-top plane analysis is populated and surfaces via PlaneFormat.
+    ///
+    /// `sampleClip()` is the synthetic placeholder (no human body), so `swing.events` are
+    /// deliberately computed via an explicit `replay` provider rather than the placeholder clip's
+    /// own (nonexistent) pose. `FrameExtractor.snapshots`, however, resolves its pose through
+    /// `PoseCache` -> `PoseProviderFactory`, which only substitutes replay data on the Simulator;
+    /// on a real device it correctly runs real Vision against the placeholder clip and (correctly)
+    /// finds no body. Pre-seeding the cache with the same replay sequence used for `swing.events`
+    /// keeps this test deterministic on both platforms instead of only ever having been exercised
+    /// on the Simulator.
     func testDTLOverlayBuildsFromReplay() async throws {
         let bundle = Bundle(for: type(of: self))
         let clip = try sampleClip()
@@ -707,6 +716,8 @@ final class AppValidationTests: XCTestCase {
         let swing = try XCTUnwrap(session.swings.first)
 
         let cacheURL = FileManager.default.temporaryDirectory.appendingPathComponent("test-pose-cache-\(UUID().uuidString).json")
+        defer { try? FileManager.default.removeItem(at: cacheURL) }
+        try JSONEncoder().encode(replay.sequence).write(to: cacheURL)
         let snaps = await FrameExtractor.snapshots(videoURL: clip, cacheURL: cacheURL, session: session, swing: swing)
         XCTAssertFalse(snaps.isEmpty, "overlay snapshots build")
         XCTAssertGreaterThan(snaps[0].handPath.count, 1, "hand-path has points")
